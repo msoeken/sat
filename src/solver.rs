@@ -31,6 +31,14 @@ pub struct Lit {
 }
 
 impl Lit {
+    pub fn from_int(int: i32) -> Self {
+        if int < 0 {
+            Self::neg(Var::new(-int as u32))
+        } else {
+            Self::pos(Var::new(int as u32))
+        }
+    }
+
     pub fn pos(var: Var) -> Self {
         Self {
             index: var.index << 1,
@@ -77,6 +85,15 @@ pub trait Solver {
     fn num_clauses(&self) -> u32;
 
     fn add_clause(&mut self, clause: &[Lit]);
+
+    fn add_clause_from_ints(&mut self, clause: &[i32]) {
+        self.add_clause(
+            &clause
+                .iter()
+                .map(|&i| Lit::from_int(i))
+                .collect::<Vec<Lit>>(),
+        )
+    }
 
     fn solve(&mut self) -> bool;
 }

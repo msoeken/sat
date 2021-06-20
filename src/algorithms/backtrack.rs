@@ -201,6 +201,8 @@ impl Solver for BacktrackingSolver {
     }
 
     fn solve(&mut self) -> bool {
+        assert_eq!(self.cls_counter, 0);
+
         // A1. [Initialize.]
         let mut a = self.num_clauses;
         let mut d = 1_u32;
@@ -267,131 +269,36 @@ impl Solver for BacktrackingSolver {
 
 #[cfg(test)]
 mod tests {
-    use crate::Result;
-    use std::ops::Not;
-
     use super::*;
 
     #[test]
-    fn rbar_is_satisfiable() -> Result<()> {
+    fn rbar_is_satisfiable() {
         let mut solver = BacktrackingSolver::new(4, 7);
 
-        // ~3 ~4 ~1
-        solver.add_clause(&[
-            solver.var(3)?.not(),
-            solver.var(4)?.not(),
-            solver.var(1)?.not(),
-        ]);
-
-        // ~2 ~3 4
-        solver.add_clause(&[
-            solver.var(2)?.not(),
-            solver.var(3)?.not(),
-            solver.var(4)?.into(),
-        ]);
-
-        // ~1 ~2 3
-        solver.add_clause(&[
-            solver.var(1)?.not(),
-            solver.var(2)?.not(),
-            solver.var(3)?.into(),
-        ]);
-
-        // 4 ~1 2
-        solver.add_clause(&[
-            solver.var(4)?.into(),
-            solver.var(1)?.not(),
-            solver.var(2)?.into(),
-        ]);
-
-        // 3 4 1
-        solver.add_clause(&[
-            solver.var(3)?.into(),
-            solver.var(4)?.into(),
-            solver.var(1)?.into(),
-        ]);
-
-        // 2 3 ~4
-        solver.add_clause(&[
-            solver.var(2)?.into(),
-            solver.var(3)?.into(),
-            solver.var(4)?.not(),
-        ]);
-
-        // 1 2 ~3
-        solver.add_clause(&[
-            solver.var(1)?.into(),
-            solver.var(2)?.into(),
-            solver.var(3)?.not(),
-        ]);
+        solver.add_clause_from_ints(&[-3, -4, -1]);
+        solver.add_clause_from_ints(&[-2, -3, 4]);
+        solver.add_clause_from_ints(&[-1, -2, 3]);
+        solver.add_clause_from_ints(&[4, -1, 2]);
+        solver.add_clause_from_ints(&[3, 4, 1]);
+        solver.add_clause_from_ints(&[2, 3, -4]);
+        solver.add_clause_from_ints(&[1, 2, -3]);
 
         assert!(solver.solve());
-
-        Ok(())
     }
 
     #[test]
-    fn r_is_unsatisfiable() -> Result<()> {
+    fn r_is_unsatisfiable() {
         let mut solver = BacktrackingSolver::new(4, 8);
 
-        // ~4 1 ~2
-        solver.add_clause(&[
-            solver.var(4)?.not(),
-            solver.var(1)?.into(),
-            solver.var(2)?.not(),
-        ]);
-
-        // ~3 ~4 ~1
-        solver.add_clause(&[
-            solver.var(3)?.not(),
-            solver.var(4)?.not(),
-            solver.var(1)?.not(),
-        ]);
-
-        // ~2 ~3 4
-        solver.add_clause(&[
-            solver.var(2)?.not(),
-            solver.var(3)?.not(),
-            solver.var(4)?.into(),
-        ]);
-
-        // ~1 ~2 3
-        solver.add_clause(&[
-            solver.var(1)?.not(),
-            solver.var(2)?.not(),
-            solver.var(3)?.into(),
-        ]);
-
-        // 4 ~1 2
-        solver.add_clause(&[
-            solver.var(4)?.into(),
-            solver.var(1)?.not(),
-            solver.var(2)?.into(),
-        ]);
-
-        // 3 4 1
-        solver.add_clause(&[
-            solver.var(3)?.into(),
-            solver.var(4)?.into(),
-            solver.var(1)?.into(),
-        ]);
-
-        // 2 3 ~4
-        solver.add_clause(&[
-            solver.var(2)?.into(),
-            solver.var(3)?.into(),
-            solver.var(4)?.not(),
-        ]);
-
-        // 1 2 ~3
-        solver.add_clause(&[
-            solver.var(1)?.into(),
-            solver.var(2)?.into(),
-            solver.var(3)?.not(),
-        ]);
+        solver.add_clause_from_ints(&[-4, 1, -2]);
+        solver.add_clause_from_ints(&[-3, -4, -1]);
+        solver.add_clause_from_ints(&[-2, -3, 4]);
+        solver.add_clause_from_ints(&[-1, -2, 3]);
+        solver.add_clause_from_ints(&[4, -1, 2]);
+        solver.add_clause_from_ints(&[3, 4, 1]);
+        solver.add_clause_from_ints(&[2, 3, -4]);
+        solver.add_clause_from_ints(&[1, 2, -3]);
 
         assert!(!solver.solve());
-
-        Ok(())
     }
 }
