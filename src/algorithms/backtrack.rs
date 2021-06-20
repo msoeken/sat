@@ -223,39 +223,34 @@ impl Solver for BacktrackingSolver {
             }
 
             // A3. [Remove ~l.]
-            loop {
-                if self.remove_lit(!l) {
-                    // A5. [Try again.]
-                    loop {
-                        if m[d as usize] < 2 {
-                            m[d as usize] = 3 - m[d as usize];
-                            l = Lit {
-                                index: 2 * d + (m[d as usize] & 1),
-                            };
-                            break; // go to A3.
-                        }
-
-                        // A6. [Backtrack.]
-                        if d == 1 {
-                            return false;
-                        }
-                        d -= 1;
+            while self.remove_lit(!l) {
+                // A5. [Try again.]
+                loop {
+                    if m[d as usize] < 2 {
+                        m[d as usize] = 3 - m[d as usize];
                         l = Lit {
-                            index: 2 * d + (m[d as usize] & 1),
+                            index: (2 * d) ^ (m[d as usize] & 1),
                         };
-
-                        // A7. [Reactivates l's clauses.]
-                        a += self.cells[l.index as usize].cls;
-                        self.reactivate(l);
-
-                        // A8. [Unremove ~l.]
-                        self.unremove_lit(!l);
-
-                        // go back to A5.
+                        break; // go to A3.
                     }
-                    continue; // go to A3.
-                } else {
-                    break;
+
+                    // A6. [Backtrack.]
+                    if d == 1 {
+                        return false;
+                    }
+                    d -= 1;
+                    l = Lit {
+                        index: (2 * d) ^ (m[d as usize] & 1),
+                    };
+
+                    // A7. [Reactivates l's clauses.]
+                    a += self.cells[l.index as usize].cls;
+                    self.reactivate(l);
+
+                    // A8. [Unremove ~l.]
+                    self.unremove_lit(!l);
+
+                    // go back to A5.
                 }
             }
 
