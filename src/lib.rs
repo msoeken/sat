@@ -8,4 +8,10 @@ mod algorithms {
     mod watching;
 }
 
+mod problems {
+    mod waerden;
+
+    pub use waerden::waerden;
+}
+
 pub use algorithms::BacktrackingSolver;

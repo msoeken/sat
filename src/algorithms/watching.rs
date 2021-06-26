@@ -45,7 +45,9 @@ impl Solver for WatchingSolver {
             self.watch[clause[0].index as usize] = self.cls_counter as usize;
         } else {
             // new watch?
-            todo!();
+            let w = self.watch[clause[0].index as usize];
+            self.watch[clause[0].index as usize] = self.cls_counter as usize;
+            self.link[self.cls_counter as usize] = w;
         }
 
         self.cls_counter -= 1;
@@ -141,6 +143,8 @@ impl Solver for WatchingSolver {
 
 #[cfg(test)]
 mod tests {
+    use crate::problems::waerden;
+
     use super::*;
 
     #[test]
@@ -172,5 +176,27 @@ mod tests {
         solver.add_clause_from_ints(&[1, 2, -3]);
 
         assert!(!solver.solve());
+    }
+
+    fn test_waerden(j: usize, k: usize, n: usize, sat: bool) {
+        let clauses = waerden(j, k, n);
+
+        let mut solver = WatchingSolver::new(n as u32, clauses.len() as u32);
+
+        for clause in clauses.iter() {
+            solver.add_clause_from_ints(clause);
+        }
+
+        assert_eq!(solver.solve(), sat);
+    }
+
+    #[test]
+    fn waerden338() {
+        test_waerden(3, 3, 8, true);
+    }
+
+    #[test]
+    fn waerden339() {
+        test_waerden(3, 3, 9, false);
     }
 }
