@@ -1,4 +1,4 @@
-use std::cmp::min;
+use std::ops::Not;
 
 use crate::{Lit, Solver, Var};
 
@@ -201,40 +201,77 @@ impl Solver for BacktrackingSolver {
     }
 
     fn solve(&mut self) -> bool {
-        assert_eq!(self.cls_counter, 0);
+        enum Steps {
+            A2,
+            A3,
+            A4,
+            A5,
+            A6,
+        }
+
+        let mut next = Steps::A2;
 
         // A1. [Initialize.]
         let mut a = self.num_clauses;
         let mut d = 1_u32;
         let mut m = vec![0_u32; self.num_vars() as usize + 1];
+        let mut l = Lit::from_int(0);
 
         loop {
-            // A2. [Choose.]
-            let mut l = if self.cells[2 * d as usize].cls <= self.cells[2 * d as usize + 1].cls {
-                Lit::neg(Var::new(d))
-            } else {
-                Lit::pos(Var::new(d))
-            };
+            match next {
+                Steps::A2 => {
+                    // [Choose.]
+                    l = if self.cells[2 * d as usize].cls <= self.cells[2 * d as usize + 1].cls {
+                        Lit::neg(Var::new(d))
+                    } else {
+                        Lit::pos(Var::new(d))
+                    };
 
-            m[d as usize] = (l.index & 1) + 4 * min(self.cells[l.index as usize].cls, 1);
+                    m[d as usize] = (l.index & 1)
+                        + if self.cells[l.not().index as usize].cls == 0 {
+                            4
+                        } else {
+                            0
+                        };
 
-            if self.cells[l.index as usize].cls == a {
-                return true;
-            }
+                    if self.cells[l.index as usize].cls == a {
+                        return true;
+                    }
+                    next = Steps::A3;
+                }
 
-            // A3. [Remove ~l.]
-            while self.remove_lit(!l) {
-                // A5. [Try again.]
-                loop {
-                    if m[d as usize] < 2 {
+                Steps::A3 => {
+                    // [Remove ~l.]
+                    next = if self.remove_lit(!l) {
+                        Steps::A5
+                    } else {
+                        Steps::A4
+                    };
+                }
+
+                Steps::A4 => {
+                    // [Deactivate l's clauses.]
+                    self.deactivate(l);
+                    a -= self.cells[l.index as usize].cls;
+                    d += 1;
+                    next = Steps::A2;
+                }
+
+                Steps::A5 => {
+                    // [Try again.]
+                    next = if m[d as usize] < 2 {
                         m[d as usize] = 3 - m[d as usize];
                         l = Lit {
                             index: (2 * d) ^ (m[d as usize] & 1),
                         };
-                        break; // go to A3.
+                        Steps::A3
+                    } else {
+                        Steps::A6
                     }
+                }
 
-                    // A6. [Backtrack.]
+                Steps::A6 => {
+                    // [Backtrack.]
                     if d == 1 {
                         return false;
                     }
@@ -243,21 +280,15 @@ impl Solver for BacktrackingSolver {
                         index: (2 * d) ^ (m[d as usize] & 1),
                     };
 
-                    // A7. [Reactivates l's clauses.]
+                    // A7.
                     a += self.cells[l.index as usize].cls;
                     self.reactivate(l);
 
-                    // A8. [Unremove ~l.]
+                    // A8.
                     self.unremove_lit(!l);
-
-                    // go back to A5.
+                    next = Steps::A5;
                 }
             }
-
-            // A4. [Deactivate l's clauses.]
-            self.deactivate(l);
-            a -= self.cells[l.index as usize].cls;
-            d += 1;
         }
     }
 }
