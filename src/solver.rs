@@ -50,6 +50,14 @@ impl Lit {
             index: (var.index << 1) + 1,
         }
     }
+
+    pub fn var_index(&self) -> u32 {
+        self.index >> 1
+    }
+
+    pub fn is_complemented(&self) -> bool {
+        (self.index & 1) == 1
+    }
 }
 
 impl Not for Lit {
