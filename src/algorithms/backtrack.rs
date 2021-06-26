@@ -218,7 +218,7 @@ impl Solver for BacktrackingSolver {
         let mut l = Lit::from_int(0);
 
         loop {
-            match next {
+            next = match next {
                 Steps::A2 => {
                     // [Choose.]
                     l = if self.cells[2 * d as usize].cls <= self.cells[2 * d as usize + 1].cls {
@@ -237,16 +237,17 @@ impl Solver for BacktrackingSolver {
                     if self.cells[l.index as usize].cls == a {
                         return true;
                     }
-                    next = Steps::A3;
+                    Steps::A3
                 }
 
                 Steps::A3 => {
                     // [Remove ~l.]
-                    next = if self.remove_lit(!l) {
+
+                    if self.remove_lit(!l) {
                         Steps::A5
                     } else {
                         Steps::A4
-                    };
+                    }
                 }
 
                 Steps::A4 => {
@@ -254,12 +255,12 @@ impl Solver for BacktrackingSolver {
                     self.deactivate(l);
                     a -= self.cells[l.index as usize].cls;
                     d += 1;
-                    next = Steps::A2;
+                    Steps::A2
                 }
 
                 Steps::A5 => {
                     // [Try again.]
-                    next = if m[d as usize] < 2 {
+                    if m[d as usize] < 2 {
                         m[d as usize] = 3 - m[d as usize];
                         l = Lit {
                             index: (2 * d) ^ (m[d as usize] & 1),
@@ -286,7 +287,7 @@ impl Solver for BacktrackingSolver {
 
                     // A8.
                     self.unremove_lit(!l);
-                    next = Steps::A5;
+                    Steps::A5
                 }
             }
         }
