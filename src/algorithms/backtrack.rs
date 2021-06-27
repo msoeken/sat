@@ -205,8 +205,6 @@ impl Solver for BacktrackingSolver {
             A2,
             A3,
             A4,
-            A5,
-            A6,
         }
 
         let mut next = Steps::A2;
@@ -242,12 +240,35 @@ impl Solver for BacktrackingSolver {
 
                 Steps::A3 => {
                     // [Remove ~l.]
+                    while self.remove_lit(!l) {
+                        // A5. [Try again.]
+                        loop {
+                            if m[d as usize] < 2 {
+                                m[d as usize] = 3 - m[d as usize];
+                                l = Lit {
+                                    index: (2 * d) ^ (m[d as usize] & 1),
+                                };
+                                break;
+                            } else {
+                                // [Backtrack.]
+                                if d == 1 {
+                                    return false;
+                                }
+                                d -= 1;
+                                l = Lit {
+                                    index: (2 * d) ^ (m[d as usize] & 1),
+                                };
 
-                    if self.remove_lit(!l) {
-                        Steps::A5
-                    } else {
-                        Steps::A4
+                                // A7.
+                                a += self.cells[l.index as usize].cls;
+                                self.reactivate(l);
+
+                                // A8.
+                                self.unremove_lit(!l);
+                            }
+                        }
                     }
+                    Steps::A4
                 }
 
                 Steps::A4 => {
@@ -256,38 +277,6 @@ impl Solver for BacktrackingSolver {
                     a -= self.cells[l.index as usize].cls;
                     d += 1;
                     Steps::A2
-                }
-
-                Steps::A5 => {
-                    // [Try again.]
-                    if m[d as usize] < 2 {
-                        m[d as usize] = 3 - m[d as usize];
-                        l = Lit {
-                            index: (2 * d) ^ (m[d as usize] & 1),
-                        };
-                        Steps::A3
-                    } else {
-                        Steps::A6
-                    }
-                }
-
-                Steps::A6 => {
-                    // [Backtrack.]
-                    if d == 1 {
-                        return false;
-                    }
-                    d -= 1;
-                    l = Lit {
-                        index: (2 * d) ^ (m[d as usize] & 1),
-                    };
-
-                    // A7.
-                    a += self.cells[l.index as usize].cls;
-                    self.reactivate(l);
-
-                    // A8.
-                    self.unremove_lit(!l);
-                    Steps::A5
                 }
             }
         }
