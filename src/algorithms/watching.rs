@@ -18,7 +18,7 @@ impl WatchList {
     }
 
     /// insert a new entry to the watch list
-    pub fn create_or_insert(&mut self, lit: &Lit, clause_index: usize) {
+    pub fn create_or_insert(&mut self, lit: Lit, clause_index: usize) {
         let w = &mut self.watch_[lit.index as usize];
 
         if *w == 0 {
@@ -32,7 +32,7 @@ impl WatchList {
     }
 
     /// insert a new clause being watched by lit
-    pub fn insert(&mut self, lit: &Lit, clause_index: usize) {
+    pub fn insert(&mut self, lit: Lit, clause_index: usize) {
         let w = &mut self.watch_[lit.index as usize];
 
         self.link_[clause_index] = *w;
@@ -40,12 +40,12 @@ impl WatchList {
     }
 
     /// make literal watch a specific clause (without changing linked lists)
-    pub fn watch(&mut self, lit: &Lit, clause_index: usize) {
+    pub fn watch(&mut self, lit: Lit, clause_index: usize) {
         self.watch_[lit.index as usize] = clause_index;
     }
 
     /// returns the watched clause by lit
-    pub fn watchee(&self, lit: &Lit) -> usize {
+    pub fn watchee(&self, lit: Lit) -> usize {
         self.watch_[lit.index as usize]
     }
 
@@ -55,12 +55,12 @@ impl WatchList {
     }
 
     /// stops watching clauses for a literal
-    pub fn remove(&mut self, lit: &Lit) {
+    pub fn remove(&mut self, lit: Lit) {
         self.watch_[lit.index as usize] = 0;
     }
 
     /// checks whether a literal is watching a clause
-    pub fn is_watching(&self, lit: &Lit) -> bool {
+    pub fn is_watching(&self, lit: Lit) -> bool {
         self.watch_[lit.index as usize] != 0
     }
 }
@@ -102,7 +102,7 @@ impl Solver for WatchingSolver {
         }
 
         self.watch_list
-            .create_or_insert(&clause[0], self.cls_counter);
+            .create_or_insert(clause[0], self.cls_counter);
 
         self.cls_counter -= 1;
     }
@@ -122,8 +122,8 @@ impl Solver for WatchingSolver {
                 return true;
             }
 
-            m[d as usize] = (!self.watch_list.is_watching(&Lit::pos(Var::new(d)))
-                || self.watch_list.is_watching(&Lit::neg(Var::new(d))))
+            m[d as usize] = (!self.watch_list.is_watching(Lit::pos(Var::new(d)))
+                || self.watch_list.is_watching(Lit::neg(Var::new(d))))
             .into();
             let mut l = Lit {
                 index: 2 * d + m[d as usize],
@@ -135,7 +135,7 @@ impl Solver for WatchingSolver {
             while cont {
                 cont = false;
 
-                let mut j = self.watch_list.watchee(&!l);
+                let mut j = self.watch_list.watchee(!l);
                 while j != 0 {
                     let i = self.start[j];
                     let ii = self.start[j - 1];
@@ -150,7 +150,7 @@ impl Solver for WatchingSolver {
                             self.lits[i] = ll;
                             self.lits[k] = !l;
                             // Now ll watches clause j
-                            self.watch_list.insert(&ll, j);
+                            self.watch_list.insert(ll, j);
                             j = jj;
                             break;
                         }
@@ -160,7 +160,7 @@ impl Solver for WatchingSolver {
                         }
                     }
                     if k == ii {
-                        self.watch_list.watch(&!l, j);
+                        self.watch_list.watch(!l, j);
 
                         // B5. [Try again.]
                         loop {
@@ -187,7 +187,7 @@ impl Solver for WatchingSolver {
             }
 
             // B4. [Advance.]
-            self.watch_list.remove(&!l);
+            self.watch_list.remove(!l);
             d += 1;
 
             // goto B2.
