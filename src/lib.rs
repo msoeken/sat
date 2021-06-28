@@ -6,6 +6,10 @@ mod algorithms {
     pub use backtrack::BacktrackingSolver;
 
     mod watching;
+    pub use watching::WatchingSolver;
+
+    mod dpll;
+    pub use dpll::DPLLSolver;
 }
 
 mod problems {
@@ -14,4 +18,5 @@ mod problems {
     pub use waerden::waerden;
 }
 
-pub use algorithms::BacktrackingSolver;
+pub use algorithms::{BacktrackingSolver, DPLLSolver, WatchingSolver};
+pub use problems::waerden;

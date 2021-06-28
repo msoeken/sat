@@ -2,7 +2,7 @@ use std::ops::Not;
 
 use crate::{Lit, Solver};
 
-struct WatchingSolver {
+pub struct WatchingSolver {
     num_vars: u32,
     num_clauses: u32,
     cls_counter: u32,
