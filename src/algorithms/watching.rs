@@ -2,14 +2,44 @@ use std::ops::Not;
 
 use crate::{Lit, Solver};
 
+struct WatchList {
+    /// matches a clause to another clause in the linked list
+    pub link: Vec<usize>,
+
+    /// maps literals to clause index (0 means no clause)
+    pub watch: Vec<usize>,
+}
+
+impl WatchList {
+    /// creates a new watch list
+    pub fn new(num_vars: usize, num_clauses: usize) -> Self {
+        Self {
+            link: vec![0; num_clauses + 1],
+            watch: vec![0; 2 * (num_vars + 1)],
+        }
+    }
+
+    /// insert a new entry to the watch list
+    pub fn insert(&mut self, lit: &Lit, clause_index: usize) {
+        if self.watch[lit.index as usize] == 0 {
+            // first watch?
+            self.watch[lit.index as usize] = clause_index;
+        } else {
+            // new watch?
+            let w = self.watch[lit.index as usize];
+            self.watch[lit.index as usize] = clause_index;
+            self.link[clause_index] = w;
+        }
+    }
+}
+
 pub struct WatchingSolver {
     num_vars: u32,
     num_clauses: u32,
-    cls_counter: u32,
+    cls_counter: usize,
     lits: Vec<Lit>,
     start: Vec<usize>,
-    link: Vec<usize>,
-    watch: Vec<usize>,
+    watch_list: WatchList,
 }
 
 impl Solver for WatchingSolver {
@@ -17,11 +47,10 @@ impl Solver for WatchingSolver {
         Self {
             num_vars,
             num_clauses,
-            cls_counter: num_clauses,
+            cls_counter: num_clauses as usize,
             lits: Vec::new(),
             start: vec![0; num_clauses as usize + 1],
-            link: vec![0; num_clauses as usize + 1],
-            watch: vec![0; 2 * (num_vars + 1) as usize],
+            watch_list: WatchList::new(num_vars as usize, num_clauses as usize),
         }
     }
 
@@ -34,21 +63,13 @@ impl Solver for WatchingSolver {
     }
 
     fn add_clause(&mut self, clause: &[Lit]) {
-        self.start[self.cls_counter as usize] = self.lits.len();
+        self.start[self.cls_counter] = self.lits.len();
 
         for &l in clause.iter() {
             self.lits.push(l);
         }
 
-        if self.watch[clause[0].index as usize] == 0 {
-            // first watch?
-            self.watch[clause[0].index as usize] = self.cls_counter as usize;
-        } else {
-            // new watch?
-            let w = self.watch[clause[0].index as usize];
-            self.watch[clause[0].index as usize] = self.cls_counter as usize;
-            self.link[self.cls_counter as usize] = w;
-        }
+        self.watch_list.insert(&clause[0], self.cls_counter);
 
         self.cls_counter -= 1;
     }
@@ -67,12 +88,13 @@ impl Solver for WatchingSolver {
                 return true;
             }
 
-            m[d as usize] =
-                if self.watch[2 * d as usize] == 0 || self.watch[2 * d as usize + 1] != 0 {
-                    1
-                } else {
-                    0
-                };
+            m[d as usize] = if self.watch_list.watch[2 * d as usize] == 0
+                || self.watch_list.watch[2 * d as usize + 1] != 0
+            {
+                1
+            } else {
+                0
+            };
             let mut l = Lit {
                 index: 2 * d + m[d as usize],
             };
@@ -83,11 +105,11 @@ impl Solver for WatchingSolver {
             while cont {
                 cont = false;
 
-                let mut j = self.watch[l.not().index as usize];
+                let mut j = self.watch_list.watch[l.not().index as usize];
                 while j != 0 {
                     let i = self.start[j];
                     let ii = self.start[j - 1];
-                    let jj = self.link[j];
+                    let jj = self.watch_list.link[j];
                     let mut k = i + 1;
                     while k < ii {
                         let ll = self.lits[k];
@@ -95,8 +117,8 @@ impl Solver for WatchingSolver {
                         {
                             self.lits[i] = ll;
                             self.lits[k] = l.not();
-                            self.link[j] = self.watch[ll.index as usize];
-                            self.watch[ll.index as usize] = j;
+                            self.watch_list.link[j] = self.watch_list.watch[ll.index as usize];
+                            self.watch_list.watch[ll.index as usize] = j;
                             j = jj;
                             break;
                         }
@@ -106,7 +128,7 @@ impl Solver for WatchingSolver {
                         }
                     }
                     if k == ii {
-                        self.watch[l.not().index as usize] = j;
+                        self.watch_list.watch[l.not().index as usize] = j;
 
                         // B5. [Try again.]
                         loop {
@@ -133,7 +155,7 @@ impl Solver for WatchingSolver {
             }
 
             // B4. [Advance.]
-            self.watch[l.not().index as usize] = 0;
+            self.watch_list.watch[l.not().index as usize] = 0;
             d += 1;
 
             // goto B2.
