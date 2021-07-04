@@ -4,17 +4,17 @@ use std::{
 };
 
 #[derive(Default)]
-struct Block<T: Default> {
+pub struct Block<T: Default> {
     tag: bool,
-    linkf: usize,
-    linkb: usize,
-    kval: usize,
+    linkf: u32,
+    linkb: u32,
+    kval: u32,
     data: T,
 }
 
 pub struct AllocatedBlock<'a, T: Default> {
     memory: &'a mut BuddyMemory<T>,
-    address: usize,
+    address: u32,
 }
 
 impl<T: Default> AllocatedBlock<'_, T> {
@@ -26,30 +26,30 @@ impl<T: Default> AllocatedBlock<'_, T> {
     }
 }
 
-impl<T: Default> Index<usize> for AllocatedBlock<'_, T> {
+impl<T: Default> Index<u32> for AllocatedBlock<'_, T> {
     type Output = T;
 
-    fn index(&self, index: usize) -> &Self::Output {
-        &self.memory.memory[self.address + index].data
+    fn index(&self, index: u32) -> &Self::Output {
+        &self.memory[self.address + index].data
     }
 }
 
-impl<T: Default> IndexMut<usize> for AllocatedBlock<'_, T> {
-    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
-        &mut self.memory.memory[self.address + index].data
+impl<T: Default> IndexMut<u32> for AllocatedBlock<'_, T> {
+    fn index_mut(&mut self, index: u32) -> &mut Self::Output {
+        &mut self.memory[self.address + index].data
     }
 }
 
 pub struct AllocatedBlockIter<'a, T: Default> {
     block: &'a AllocatedBlock<'a, T>,
-    current: usize,
+    current: u32,
 }
 
 impl<'a, T: Default> Iterator for AllocatedBlockIter<'a, T> {
     type Item = &'a T;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.current < (1 << self.block.memory.memory[self.block.address].kval) {
+        if self.current < (1 << self.block.memory[self.block.address].kval) {
             self.current += 1;
             Some(&self.block[self.current - 1])
         } else {
@@ -59,17 +59,17 @@ impl<'a, T: Default> Iterator for AllocatedBlockIter<'a, T> {
 }
 
 pub struct BuddyMemory<T: Default> {
-    m: usize,
+    m: u32,
     memory: Vec<Block<T>>,
 }
 
 impl<T: Default> BuddyMemory<T> {
-    pub fn new(m: usize) -> Self {
+    pub fn new(m: u32) -> Self {
         // The first 2ᵐ elements are for data blocks; the last m + 1 elements
         // are list heads for AVAIL
         let mut memory: Vec<_> = repeat(())
             .map(|_| Block::default())
-            .take((1 << m) + m + 1)
+            .take(((1 << m) + m + 1) as usize)
             .collect();
 
         // fill meta-information into first and only available block
@@ -79,36 +79,36 @@ impl<T: Default> BuddyMemory<T> {
         memory[0].kval = m;
 
         // setup list heads
-        memory[(1 << m) + m].linkf = 0;
-        memory[(1 << m) + m].linkb = 0;
+        memory[((1 << m) + m) as usize].linkf = 0;
+        memory[((1 << m) + m) as usize].linkb = 0;
         for k in 0..m {
-            memory[(1 << m) + k].linkf = (1 << m) + k;
-            memory[(1 << m) + k].linkb = (1 << m) + k;
+            memory[((1 << m) + k) as usize].linkf = (1 << m) + k;
+            memory[((1 << m) + k) as usize].linkb = (1 << m) + k;
         }
 
         Self { m, memory }
     }
 
-    fn loc_avail(&self, k: usize) -> usize {
+    fn loc_avail(&self, k: u32) -> u32 {
         assert!(k <= self.m);
 
         (1 << self.m) + k
     }
 
-    pub fn reserve(&mut self, k: usize) -> AllocatedBlock<T> {
+    pub fn reserve(&mut self, k: u32) -> AllocatedBlock<T> {
         // R1. [Find block.]
         let mut j = (k..=self.m)
-            .find(|&j| self.memory[(1 << self.m) + j].linkf != (1 << self.m) + j)
+            .find(|&j| self[(1 << self.m) + j].linkf != (1 << self.m) + j)
             .expect("no more available blocks of sufficient size");
 
         // R2. [Remove from list.]
         let loc_j = self.loc_avail(j);
-        let location = self.memory[loc_j].linkf;
-        let block = self.memory[location].linkf;
-        self.memory[loc_j].linkf = block;
-        self.memory[block].linkb = self.loc_avail(j);
-        self.memory[location].tag = false;
-        self.memory[location].kval = k;
+        let location = self[loc_j].linkf;
+        let block = self[location].linkf;
+        self[loc_j].linkf = block;
+        self[block].linkb = self.loc_avail(j);
+        self[location].tag = false;
+        self[location].kval = k;
 
         // R3. [Split required?]
         while j != k {
@@ -118,12 +118,12 @@ impl<T: Default> BuddyMemory<T> {
 
             // get buddy
             let block = location + (1 << j);
-            self.memory[block].tag = true;
-            self.memory[block].kval = j;
-            self.memory[block].linkf = loc_j;
-            self.memory[block].linkb = loc_j;
-            self.memory[loc_j].linkf = block;
-            self.memory[loc_j].linkb = block;
+            self[block].tag = true;
+            self[block].kval = j;
+            self[block].linkf = loc_j;
+            self[block].linkb = loc_j;
+            self[loc_j].linkf = block;
+            self[loc_j].linkb = block;
         }
 
         AllocatedBlock {
@@ -132,23 +132,23 @@ impl<T: Default> BuddyMemory<T> {
         }
     }
 
-    pub fn free(&mut self, location: usize) {
-        let mut k = self.memory[location].kval;
+    pub fn free(&mut self, location: u32) {
+        let mut k = self[location].kval;
         let mut location = location;
 
         loop {
             let buddy = location ^ (1 << k);
 
-            if (k == self.m) || !self.memory[buddy].tag || self.memory[buddy].kval != k {
+            if (k == self.m) || !self[buddy].tag || self[buddy].kval != k {
                 break;
             }
 
             // S2. [Combine with buddy.]
-            let linkb = self.memory[buddy].linkb;
-            self.memory[linkb].linkf = self.memory[buddy].linkf;
+            let linkb = self[buddy].linkb;
+            self[linkb].linkf = self[buddy].linkf;
 
-            let linkf = self.memory[buddy].linkf;
-            self.memory[linkf].linkb = self.memory[buddy].linkb;
+            let linkf = self[buddy].linkf;
+            self[linkf].linkb = self[buddy].linkb;
 
             k += 1;
             if buddy < location {
@@ -157,15 +157,29 @@ impl<T: Default> BuddyMemory<T> {
         }
 
         // S3. [Put on list.]
-        self.memory[location].tag = true;
+        self[location].tag = true;
         let loc_k = self.loc_avail(k);
         // get first block in AVAIL[k]; insert block before
-        let first = self.memory[loc_k].linkf;
-        self.memory[location].linkf = first;
-        self.memory[first].linkb = location;
-        self.memory[location].kval = k;
-        self.memory[location].linkb = loc_k;
-        self.memory[loc_k].linkf = location;
+        let first = self[loc_k].linkf;
+        self[location].linkf = first;
+        self[first].linkb = location;
+        self[location].kval = k;
+        self[location].linkb = loc_k;
+        self[loc_k].linkf = location;
+    }
+}
+
+impl<T: Default> Index<u32> for BuddyMemory<T> {
+    type Output = Block<T>;
+
+    fn index(&self, index: u32) -> &Self::Output {
+        &self.memory[index as usize]
+    }
+}
+
+impl<T: Default> IndexMut<u32> for BuddyMemory<T> {
+    fn index_mut(&mut self, index: u32) -> &mut Self::Output {
+        &mut self.memory[index as usize]
     }
 }
 
