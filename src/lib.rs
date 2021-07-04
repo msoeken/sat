@@ -18,5 +18,11 @@ mod problems {
     pub use waerden::waerden;
 }
 
+pub mod utils {
+    mod buddy_memory;
+
+    pub use buddy_memory::BuddyMemory;
+}
+
 pub use algorithms::{BacktrackingSolver, DPLLSolver, WatchingSolver};
 pub use problems::waerden;
