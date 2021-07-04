@@ -1,4 +1,7 @@
-use std::iter::repeat;
+use std::{
+    iter::repeat,
+    ops::{Index, IndexMut},
+};
 
 #[derive(Default)]
 struct Block<T: Default> {
@@ -7,6 +10,52 @@ struct Block<T: Default> {
     linkb: usize,
     kval: usize,
     data: T,
+}
+
+pub struct AllocatedBlock<'a, T: Default> {
+    memory: &'a mut BuddyMemory<T>,
+    address: usize,
+}
+
+impl<T: Default> AllocatedBlock<'_, T> {
+    pub fn iter(&self) -> AllocatedBlockIter<'_, T> {
+        AllocatedBlockIter {
+            block: self,
+            current: 0,
+        }
+    }
+}
+
+impl<T: Default> Index<usize> for AllocatedBlock<'_, T> {
+    type Output = T;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.memory.memory[self.address + index].data
+    }
+}
+
+impl<T: Default> IndexMut<usize> for AllocatedBlock<'_, T> {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        &mut self.memory.memory[self.address + index].data
+    }
+}
+
+pub struct AllocatedBlockIter<'a, T: Default> {
+    block: &'a AllocatedBlock<'a, T>,
+    current: usize,
+}
+
+impl<'a, T: Default> Iterator for AllocatedBlockIter<'a, T> {
+    type Item = &'a T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.current < (1 << self.block.memory.memory[self.block.address].kval) {
+            self.current += 1;
+            Some(&self.block[self.current - 1])
+        } else {
+            None
+        }
+    }
 }
 
 pub struct BuddyMemory<T: Default> {
@@ -46,7 +95,7 @@ impl<T: Default> BuddyMemory<T> {
         (1 << self.m) + k
     }
 
-    pub fn reserve(&mut self, k: usize) -> usize {
+    pub fn reserve(&mut self, k: usize) -> AllocatedBlock<T> {
         // R1. [Find block.]
         let mut j = (k..=self.m)
             .find(|&j| self.memory[(1 << self.m) + j].linkf != (1 << self.m) + j)
@@ -59,6 +108,7 @@ impl<T: Default> BuddyMemory<T> {
         self.memory[loc_j].linkf = block;
         self.memory[block].linkb = self.loc_avail(j);
         self.memory[location].tag = false;
+        self.memory[location].kval = k;
 
         // R3. [Split required?]
         while j != k {
@@ -76,7 +126,10 @@ impl<T: Default> BuddyMemory<T> {
             self.memory[loc_j].linkb = block;
         }
 
-        location
+        AllocatedBlock {
+            memory: self,
+            address: location,
+        }
     }
 
     pub fn free(&mut self, location: usize) {
@@ -124,14 +177,32 @@ mod tests {
     fn test_buddy_memory() {
         let mut mem = BuddyMemory::<u32>::new(3);
 
-        assert_eq!(mem.reserve(2), 0);
-        assert_eq!(mem.reserve(1), 4);
-        assert_eq!(mem.reserve(0), 6);
-        assert_eq!(mem.reserve(0), 7);
+        let mut block = mem.reserve(2);
+        assert_eq!(block[0], 0);
+        block[0] = 42;
+        block[1] = 21;
+        block[2] = 17;
+        block[3] = 12;
+        assert_eq!(block[0], 42);
+
+        for (idx, &val) in block.iter().enumerate() {
+            match idx {
+                0 => assert_eq!(val, 42),
+                1 => assert_eq!(val, 21),
+                2 => assert_eq!(val, 17),
+                3 => assert_eq!(val, 12),
+                _ => unreachable!(),
+            }
+        }
+
+        assert_eq!(block.address, 0);
+        assert_eq!(mem.reserve(1).address, 4);
+        assert_eq!(mem.reserve(0).address, 6);
+        assert_eq!(mem.reserve(0).address, 7);
 
         mem.free(0);
 
-        assert_eq!(mem.reserve(1), 0);
-        assert_eq!(mem.reserve(1), 2);
+        assert_eq!(mem.reserve(1).address, 0);
+        assert_eq!(mem.reserve(1).address, 2);
     }
 }
