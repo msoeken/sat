@@ -81,10 +81,10 @@ impl<T: Default> BuddyMemory<T> {
 
     pub fn free(&mut self, location: usize) {
         let mut k = self.memory[location].kval;
-        let mut L = location;
+        let mut location = location;
 
         loop {
-            let buddy = L ^ (1 << k);
+            let buddy = location ^ (1 << k);
 
             if (k == self.m) || !self.memory[buddy].tag || self.memory[buddy].kval != k {
                 break;
@@ -98,20 +98,21 @@ impl<T: Default> BuddyMemory<T> {
             self.memory[linkf].linkb = self.memory[buddy].linkb;
 
             k += 1;
-            if buddy < L {
-                L = buddy;
+            if buddy < location {
+                location = buddy;
             }
         }
 
         // S3. [Put on list.]
-        self.memory[L].tag = true;
+        self.memory[location].tag = true;
         let loc_k = self.loc_avail(k);
-        let block = self.memory[loc_k].linkf;
-        self.memory[L].linkf = block;
-        self.memory[block].linkb = L;
-        self.memory[L].kval = k;
-        self.memory[L].linkb = loc_k;
-        self.memory[loc_k].linkf = L;
+        // get first block in AVAIL[k]; insert block before
+        let first = self.memory[loc_k].linkf;
+        self.memory[location].linkf = first;
+        self.memory[first].linkb = location;
+        self.memory[location].kval = k;
+        self.memory[location].linkb = loc_k;
+        self.memory[loc_k].linkf = location;
     }
 }
 
