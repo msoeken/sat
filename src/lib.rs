@@ -8,8 +8,13 @@ mod algorithms {
     mod watching;
     pub use watching::WatchingSolver;
 
+    mod cdcl;
+    pub use cdcl::CDCLSolver;
+
     mod dpll;
     pub use dpll::DPLLSolver;
+
+    mod lookahead;
 }
 
 mod problems {
@@ -21,8 +26,8 @@ mod problems {
 pub mod utils {
     mod buddy_memory;
 
-    pub use buddy_memory::BuddyMemory;
+    pub use buddy_memory::{AllocatedBlock, BuddyMemory};
 }
 
-pub use algorithms::{BacktrackingSolver, DPLLSolver, WatchingSolver};
+pub use algorithms::{BacktrackingSolver, CDCLSolver, DPLLSolver, WatchingSolver};
 pub use problems::waerden;

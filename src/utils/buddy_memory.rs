@@ -34,7 +34,15 @@ pub struct AllocatedBlock<'a, T: Default> {
     address: u32,
 }
 
-impl<T: Default> AllocatedBlock<'_, T> {
+impl<'a, T: Default> AllocatedBlock<'a, T> {
+    pub fn new(memory: &'a mut BuddyMemory<T>, address: u32) -> Self {
+        Self { memory, address }
+    }
+
+    pub fn address(&self) -> u32 {
+        self.address
+    }
+
     pub fn iter(&self) -> AllocatedBlockIter<'_, T> {
         AllocatedBlockIter {
             block: self,
@@ -43,7 +51,7 @@ impl<T: Default> AllocatedBlock<'_, T> {
     }
 }
 
-impl<T: Default> Index<u32> for AllocatedBlock<'_, T> {
+impl<'a, T: Default> Index<u32> for AllocatedBlock<'a, T> {
     type Output = T;
 
     fn index(&self, index: u32) -> &Self::Output {
@@ -112,7 +120,7 @@ impl<T: Default> BuddyMemory<T> {
         (1 << self.m) + k
     }
 
-    pub fn reserve(&mut self, k: u32) -> AllocatedBlock<T> {
+    pub fn reserve<'a>(&'a mut self, k: u32) -> AllocatedBlock<'a, T> {
         // R1. [Find block.]
         let mut j = (k..=self.m)
             .find(|&j| self[(1 << self.m) + j].linkf != (1 << self.m) + j)
@@ -143,10 +151,7 @@ impl<T: Default> BuddyMemory<T> {
             self[loc_j].linkb = block;
         }
 
-        AllocatedBlock {
-            memory: self,
-            address: location,
-        }
+        AllocatedBlock::new(self, location)
     }
 
     pub fn free(&mut self, location: u32) {
