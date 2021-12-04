@@ -1,9 +1,7 @@
-use std::fmt::Debug;
+use std::{fmt::Debug, thread::JoinHandle};
 
 use itertools::Itertools;
 use rand::{prelude::StdRng, thread_rng, Rng, SeedableRng};
-
-use crate::Solver;
 
 #[derive(Default)]
 pub struct CDCLSolver {
@@ -37,8 +35,8 @@ pub struct CDCLSolver {
     /// Length of forced literals $G$
     len_forced: usize,
 
-    /// List of decision time points $i_d$
-    decisions: Vec<usize>,
+    /// List of decision time points $i_d$ together with stamps
+    decisions: Vec<Decision>,
 
     /// Decision level $d$
     decision_level: u32,
@@ -46,10 +44,13 @@ pub struct CDCLSolver {
     /// Reasons for literal in trail $R_l$, indexed from 2..=2n + 1
     reasons: Vec<u32>,
 
-    s: u32,
+    /// Unique stamp number $s$
+    stamp: u32,
     M: u32,
     h: u32,
-    DEL: u32,
+
+    /// Activity scaling factor DEL
+    scaling_factor: f64,
 }
 
 #[derive(Clone)]
@@ -60,7 +61,18 @@ struct Variable {
     oval: i32,
     tloc: i32,
     hloc: i32,
-    act: u32,
+    act: f64,
+}
+
+struct Decision {
+    time: u32,
+    stamp: u32,
+}
+
+impl Decision {
+    pub fn new(time: u32) -> Self {
+        Self { time, stamp: 0 }
+    }
 }
 
 enum State {
@@ -68,8 +80,6 @@ enum State {
     C3,
     C5,
     C6,
-    C7,
-    C8,
     C9,
 }
 
@@ -81,7 +91,7 @@ impl Default for Variable {
             oval: -1,
             tloc: -1,
             hloc: Default::default(),
-            act: 0,
+            act: 0.0,
         }
     }
 }
@@ -112,6 +122,7 @@ impl CDCLSolver {
 
         // global? variables
         let mut l;
+        let mut conflict_clause = 0;
 
         let mut current = State::C2;
 
@@ -131,10 +142,18 @@ impl CDCLSolver {
                     l = self.trail[self.len_forced];
                     self.len_forced += 1;
 
-                    if self.propagate(l) {
-                        State::C2
+                    if let Some(conflict_clause) = self.propagate(l) {
+                        // [C7. Resolve conflict.]
+                        if self.decision_level == 0 {
+                            return false;
+                        }
+
+                        let (ll, learned_rest) = self.resolve_conflict_clause(conflict_clause);
+
+                        // [C8. Backjump.]
+                        todo!("backjump, ll = {}, b = {:?}", ll, learned_rest);
                     } else {
-                        State::C7
+                        State::C2
                     }
                 }
 
@@ -147,7 +166,7 @@ impl CDCLSolver {
                     // TODO purge excess clauses
                     // TODO flush literals
                     self.decision_level += 1;
-                    self.decisions.push(self.len_trail);
+                    self.decisions.push(Decision::new(self.len_trail as u32));
                     State::C6
                 }
 
@@ -171,15 +190,9 @@ impl CDCLSolver {
                     }
                 }
 
-                State::C7 => {
-                    todo!("conflict");
-                }
-
                 _ => todo!(),
             }
         }
-
-        true
     }
 
     #[inline]
@@ -214,6 +227,16 @@ impl CDCLSolver {
         val >= 0 && (val as u32 + l) % 2 == 1
     }
 
+    #[inline]
+    fn clause(&self, c: u32) -> Clause {
+        Clause::new(self, c)
+    }
+
+    #[inline]
+    fn lit_var_mut(&mut self, lit: u32) -> &mut Variable {
+        &mut self.vars[lit as usize >> 1]
+    }
+
     pub fn show_mem(&self) {
         let chunk_size = 20;
         for (row, chunk) in self.mem.chunks(chunk_size).enumerate() {
@@ -235,19 +258,20 @@ impl CDCLSolver {
     }
 
     fn show_trail(&self) {
-        println!(" t   L_t   level   reason");
+        println!(" t   TLOC   L_t   level   reason");
         for t in 0..self.len_trail {
             let lit = self.trail[t];
             let reason = self.reasons[lit as usize];
             println!(
-                "{:>2}   {:>3}   {:>5}   {}",
+                "{:>2}   {:>4}   {:>3}   {:>5}   {}",
                 t,
+                self.vars[(lit >> 1) as usize].tloc,
                 Self::lit_to_str(lit),
                 self.vars[(lit >> 1) as usize].val >> 1,
                 if reason == 0 {
                     "Λ".into()
                 } else {
-                    format!("{:?}", Clause::new(self, self.reasons[lit as usize]))
+                    format!("{:?}", self.clause(self.reasons[lit as usize]))
                 }
             );
         }
@@ -293,13 +317,13 @@ impl CDCLSolver {
             return false;
         }
 
-        self.decisions.push(0);
+        self.decisions.push(Decision::new(0));
         self.decision_level = 0;
-        self.s = 0;
+        self.stamp = 0;
         self.M = 0;
         self.len_forced = 0;
         self.h = self.num_vars as u32;
-        self.DEL = 1;
+        self.scaling_factor = 1.0;
 
         true
     }
@@ -358,7 +382,7 @@ impl CDCLSolver {
 
     /// Propagates the most recent decision `l` and forces units, returns false
     /// if a conflict is detected
-    fn propagate(&mut self, l: u32) -> bool {
+    fn propagate(&mut self, l: u32) -> Option<u32> {
         // do step C4 for all c in the watch list of \bar l
         let mut q = 0;
         let mut c = self.watch[l as usize ^ 1];
@@ -373,7 +397,7 @@ impl CDCLSolver {
         );
 
         while c != 0 {
-            println!("Handle clause {}: {:?}", c, Clause::new(self, c));
+            println!("Handle clause {}: {:?}", c, self.clause(c));
             self.show_trail();
 
             if self.clause_lit(c, 0) == (l ^ 1) {
@@ -381,7 +405,7 @@ impl CDCLSolver {
                 self.mem.swap(c as usize, c as usize + 1);
                 self.mem.swap(c as usize - 3, c as usize - 2);
 
-                println!("  reordered clause: {:?}", Clause::new(self, c));
+                println!("  reordered clause: {:?}", self.clause(c));
             }
 
             let cc = self.clause_watch1(c);
@@ -433,7 +457,7 @@ impl CDCLSolver {
 
                     assert_eq!(l0, self.clause_lit(c, 0));
                     if self.vars[l0 as usize >> 1].val >= 0 {
-                        return false;
+                        return Some(c);
                     } else {
                         println!("  l0 has no value, so it should be forced");
 
@@ -457,7 +481,131 @@ impl CDCLSolver {
             self.watch[l as usize ^ 1] = c;
         }
 
-        true
+        None
+    }
+
+    /// Resolves a conflict clause from an initial clause `c` as described in
+    /// Exercise 263.
+    ///
+    /// Returns l' and b array
+    fn resolve_conflict_clause(&mut self, c: u32) -> (u32, Vec<u32>) {
+        let mut dd = 0;
+        let mut q = 0;
+        let mut new_clause = vec![];
+
+        self.stamp += 3;
+        self.lit_var_mut(self.clause_lit(c, 0)).stamp = self.stamp;
+        self.bump(self.clause_lit(c, 0));
+
+        let mut t = self.vars[self.clause_lit(c, 0) as usize >> 1].tloc;
+        for j in 1..self.clause_len(c) {
+            let lj = self.clause_lit(c, j);
+            self.blit(lj, &mut q, &mut new_clause, &mut dd);
+            t = std::cmp::max(t, self.vars[lj as usize >> 1].tloc);
+        }
+
+        println!("   currently in b = {:?}, t = {}", new_clause, t);
+
+        while q > 0 {
+            let l = self.trail[t as usize];
+            t -= 1;
+            if self.vars[l as usize >> 1].stamp == self.stamp {
+                q -= 1;
+                // TODO: move out of if?
+            }
+            let rc = self.reasons[l as usize];
+            if rc != 0 {
+                for j in 1..self.clause_len(rc) {
+                    let lj = self.clause_lit(rc, j);
+                    self.blit(lj, &mut q, &mut &mut new_clause, &mut dd);
+                }
+            }
+        }
+
+        let mut ll = self.trail[t as usize];
+        while self.vars[ll as usize >> 1].stamp != self.stamp {
+            t -= 1;
+            ll = self.trail[t as usize];
+        }
+
+        print!(
+            "conflict clause = {:?}, q = {}, b = {:?}, ll = {}, t = {}",
+            self.clause(c),
+            q,
+            new_clause
+                .iter()
+                .map(|&l| Self::lit_to_str(l))
+                .collect_vec(),
+            Self::lit_to_str(ll),
+            t
+        );
+
+        // TODO check for redundancies (Exercise 257)
+
+        (ll, new_clause)
+    }
+
+    /// Bump operation as described in Exercise 263 and 262.
+    fn bump(&mut self, l: u32) {
+        let k = l >> 1;
+        let del = self.scaling_factor;
+
+        let var = self.lit_var_mut(k);
+        let alpha = var.act;
+        var.act = alpha + del;
+        let mut j = var.hloc;
+        if j > 0 {
+            // siftup
+            loop {
+                let jj = (j - 1) >> 1;
+                let i = self.heap[jj as usize];
+                if self.vars[i as usize].act >= alpha {
+                    break;
+                } else {
+                    self.heap[j as usize] = i;
+                    self.vars[i as usize].hloc = j;
+                    j = jj;
+                    if j == 0 {
+                        break;
+                    }
+                }
+
+                self.heap[j as usize] = k;
+                self.vars[k as usize].hloc = j;
+            }
+        }
+    }
+
+    /// Blit operation as described in Exercise 263.
+    fn blit(&mut self, l: u32, q: &mut u32, new_clause: &mut Vec<u32>, dd: &mut u32) {
+        let s = self.stamp;
+        let var = self.lit_var_mut(l);
+
+        if var.stamp == s {
+            return;
+        }
+
+        var.stamp = s;
+        assert!(var.val >= 0);
+        let p = (var.val >> 1) as u32;
+        if p > 0 {
+            self.bump(l);
+        }
+        if p == self.decision_level {
+            *q += 1;
+        } else {
+            new_clause.push(l ^ 1);
+            if p > *dd {
+                *dd = p;
+            }
+            if self.decisions[p as usize].stamp <= s {
+                self.decisions[p as usize].stamp = s + if self.decisions[p as usize].stamp == s {
+                    1
+                } else {
+                    0
+                };
+            }
+        }
     }
 
     /// Initializes the heap as a random permutation over ${1, ..., n}$ based on
