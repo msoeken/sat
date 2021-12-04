@@ -64,15 +64,10 @@ struct Variable {
     act: f64,
 }
 
+#[derive(Default, Clone)]
 struct Decision {
     time: u32,
     stamp: u32,
-}
-
-impl Decision {
-    pub fn new(time: u32) -> Self {
-        Self { time, stamp: 0 }
-    }
 }
 
 enum State {
@@ -104,7 +99,7 @@ impl CDCLSolver {
             heap: vec![0; num_vars],
             watch: vec![0; (2 + 1) * num_vars],
             trail: vec![0; num_vars + 1],
-            decisions: Vec::with_capacity(num_vars),
+            decisions: vec![Default::default(); num_vars + 1],
             reasons: vec![0; (2 + 1) * num_vars],
             ..Default::default()
         }
@@ -148,10 +143,40 @@ impl CDCLSolver {
                             return false;
                         }
 
-                        let (ll, learned_rest) = self.resolve_conflict_clause(conflict_clause);
+                        let (ll, learned_rest, dd) = self.resolve_conflict_clause(conflict_clause);
 
                         // [C8. Backjump.]
-                        todo!("backjump, ll = {}, b = {:?}", ll, learned_rest);
+                        let bound = self.decisions[dd as usize + 1].time as usize;
+
+                        println!("L = {}, bound = {}", self.len_trail, bound);
+                        self.show_heap();
+
+                        while self.len_trail > bound {
+                            self.len_trail -= 1;
+                            let l = self.trail[self.len_trail];
+                            let k = l >> 1;
+                            self.vars[k as usize].oval = self.vars[k as usize].val;
+                            self.vars[k as usize].val = -1;
+                            self.reasons[l as usize] = 0;
+                            if self.vars[k as usize].hloc < 0 {
+                                println!("  insert {} into HEAP", k);
+                                let alpha = self.vars[k as usize].act;
+                                let j = self.h;
+                                self.h += 1;
+                                if j == 0 {
+                                    self.heap[0] = k;
+                                    self.vars[k as usize].hloc = 0;
+                                } else {
+                                    self.siftup(k, j as i32, alpha);
+                                }
+                            }
+                        }
+
+                        self.len_forced = self.len_trail;
+                        self.decision_level = dd;
+
+                        // [C9. Learn.]
+                        todo!("learn");
                     } else {
                         State::C2
                     }
@@ -166,7 +191,7 @@ impl CDCLSolver {
                     // TODO purge excess clauses
                     // TODO flush literals
                     self.decision_level += 1;
-                    self.decisions.push(Decision::new(self.len_trail as u32));
+                    self.decisions[self.decision_level as usize].time = self.len_trail as u32;
                     State::C6
                 }
 
@@ -301,14 +326,20 @@ impl CDCLSolver {
         }
     }
 
+    fn show_heap(&self) {
+        println!(
+            "heap = {:?}, h = {}",
+            &self.heap[0..self.h as usize],
+            self.h,
+        );
+    }
+
     fn sanity_check(&self) {
         for k in 1..self.num_vars {
             if self.vars[k].hloc != -1 {
                 assert_eq!(self.heap[self.vars[k].hloc as usize], k as u32);
             }
         }
-
-        assert_eq!(self.decisions.len(), self.decision_level as usize + 1);
     }
 
     fn initialize(&mut self, problem: impl Iterator<Item = impl Iterator<Item = u32>>) -> bool {
@@ -317,7 +348,7 @@ impl CDCLSolver {
             return false;
         }
 
-        self.decisions.push(Decision::new(0));
+        self.decisions[0].time = 0;
         self.decision_level = 0;
         self.stamp = 0;
         self.M = 0;
@@ -370,12 +401,8 @@ impl CDCLSolver {
         self.heap[j] = i as u32;
         self.vars[i].hloc = j as i32;
 
-        println!(
-            "heap = {:?}, h = {}, k = {}",
-            &self.heap[0..self.h as usize],
-            self.h,
-            k
-        );
+        self.show_heap();
+        println!("k = {}", k);
 
         k
     }
@@ -487,8 +514,8 @@ impl CDCLSolver {
     /// Resolves a conflict clause from an initial clause `c` as described in
     /// Exercise 263.
     ///
-    /// Returns l' and b array
-    fn resolve_conflict_clause(&mut self, c: u32) -> (u32, Vec<u32>) {
+    /// Returns l' and b array, and max level d'
+    fn resolve_conflict_clause(&mut self, c: u32) -> (u32, Vec<u32>, u32) {
         let mut dd = 0;
         let mut q = 0;
         let mut new_clause = vec![];
@@ -528,7 +555,7 @@ impl CDCLSolver {
             ll = self.trail[t as usize];
         }
 
-        print!(
+        println!(
             "conflict clause = {:?}, q = {}, b = {:?}, ll = {}, t = {}",
             self.clause(c),
             q,
@@ -542,7 +569,7 @@ impl CDCLSolver {
 
         // TODO check for redundancies (Exercise 257)
 
-        (ll, new_clause)
+        (ll, new_clause, dd)
     }
 
     /// Bump operation as described in Exercise 263 and 262.
@@ -550,10 +577,15 @@ impl CDCLSolver {
         let k = l >> 1;
         let del = self.scaling_factor;
 
-        let var = self.lit_var_mut(k);
+        let var = self.lit_var_mut(l);
         let alpha = var.act;
         var.act = alpha + del;
-        let mut j = var.hloc;
+        let j = self.vars[k as usize].hloc;
+        self.siftup(k, j, alpha);
+    }
+
+    /// Performs siftup operation described in Exercise 262.
+    fn siftup(&mut self, k: u32, mut j: i32, alpha: f64) {
         if j > 0 {
             // siftup
             loop {
@@ -569,10 +601,9 @@ impl CDCLSolver {
                         break;
                     }
                 }
-
-                self.heap[j as usize] = k;
-                self.vars[k as usize].hloc = j;
             }
+            self.heap[j as usize] = k;
+            self.vars[k as usize].hloc = j;
         }
     }
 
