@@ -113,8 +113,6 @@ impl CDCLSolver {
 
         // global? variables
         let mut l;
-        let mut q;
-        let mut c;
 
         let mut current = State::C2;
 
@@ -135,8 +133,8 @@ impl CDCLSolver {
                     self.len_forced += 1;
 
                     // do step C4 for all c in the watch list of \bar l
-                    q = 0;
-                    c = self.watch[l as usize ^ 1];
+                    let mut q = 0;
+                    let mut c = self.watch[l as usize ^ 1];
 
                     self.show_watched_lists();
                     self.show_trail();
@@ -147,28 +145,19 @@ impl CDCLSolver {
                         c
                     );
 
-                    println!();
-
                     while c != 0 {
                         println!("Handle clause {}: {:?}", c, Clause::new(self, c));
                         self.show_trail();
 
-                        let mut ll = self.clause_lit(c, 0);
-                        let cc;
-                        if ll != (l ^ 1) {
-                            cc = self.clause_watch1(c);
-                        } else {
-                            // TODO simplify with swaps?
-                            // reorder clause
-                            ll = self.clause_lit(c, 1);
-                            self.mem[c as usize] = ll;
-                            self.mem[c as usize + 1] = l ^ 1;
-                            cc = self.clause_watch0(c);
-                            self.mem[c as usize - 2] = self.clause_watch1(c);
-                            self.mem[c as usize - 3] = cc;
+                        if self.clause_lit(c, 0) == (l ^ 1) {
+                            // reorder clause (l0 with l1, and watch0 with watch1)
+                            self.mem.swap(c as usize, c as usize + 1);
+                            self.mem.swap(c as usize - 3, c as usize - 2);
 
                             println!("  reordered clause: {:?}", Clause::new(self, c));
                         }
+
+                        let cc = self.clause_watch1(c);
 
                         println!("  potential next clause is {}", cc);
 
@@ -192,15 +181,15 @@ impl CDCLSolver {
                                 j += 1;
                             }
 
-                            println!("  j = {}", j);
-
                             if j < self.clause_len(c) {
-                                assert_eq!(self.clause_lit(c, 1), l ^ 1);
+                                // We have found some undecided literal lj
+                                // (where j >= 2).  Move current clause c into
+                                // the watch list of that literal and re-order
+                                // clause accordingly.
 
                                 // we found some undecided lj, so watch clause on lj
                                 // swap lj with l1
-                                self.mem[c as usize + 1] = self.clause_lit(c, j);
-                                self.mem[(c + j) as usize] = l ^ 1;
+                                self.mem.swap((c + 1) as usize, (c + j) as usize);
 
                                 let l1 = self.clause_lit(c, 1) as usize;
                                 self.mem[c as usize - 3] = self.watch[l1];
