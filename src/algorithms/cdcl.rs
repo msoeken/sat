@@ -75,7 +75,6 @@ enum State {
     C3,
     C5,
     C6,
-    C9,
 }
 
 impl Default for Variable {
@@ -117,7 +116,6 @@ impl CDCLSolver {
 
         // global? variables
         let mut l;
-        let mut conflict_clause = 0;
 
         let mut current = State::C2;
 
@@ -176,7 +174,58 @@ impl CDCLSolver {
                         self.decision_level = dd;
 
                         // [C9. Learn.]
-                        todo!("learn");
+                        self.show_mem();
+                        println!("MAXL = {}", self.maxl);
+
+                        if self.decision_level > 0 {
+                            let c = self.maxl;
+                            // MEM may grow a bit larger, but we keep MAXL correct to be able to ignore this
+                            self.mem.resize(self.maxl + learned_rest.len() + 3, 0);
+                            // insert learned clause into MEM
+                            self.mem[c] = ll ^ 1;
+                            let mut k = 0;
+                            let mut jj = 1;
+                            for j in 1..=learned_rest.len() {
+                                let bj = learned_rest[j - 1];
+
+                                // here we compare the stamp again, making use of checking redundancies before
+                                if self.vars[bj as usize >> 1].stamp != self.stamp {
+                                    continue;
+                                }
+
+                                k += 1;
+                                if jj == 0 || (self.vars[bj as usize >> 1].val as u32 >> 1) < dd {
+                                    self.mem[c + k + jj] = bj ^ 1;
+                                } else {
+                                    self.mem[c + 1] = bj ^ 1;
+                                    jj = 0;
+                                    self.mem[c - 2] = self.watch[ll as usize ^ 1];
+                                    self.watch[ll as usize ^ 1] = c as u32;
+                                    self.mem[c - 3] = self.watch[bj as usize ^ 1];
+                                    self.watch[bj as usize ^ 1] = c as u32;
+                                }
+                            }
+                            self.mem[c - 1] = k as u32 + 1;
+                            self.maxl = c + k + 6;
+
+                            self.show_mem();
+                            self.reasons[ll as usize] = c as u32;
+                        } else {
+                            // new decision (invert literal at level 0)
+                            self.reasons[ll as usize] = 0;
+                        }
+
+                        self.M += 1;
+                        self.trail[self.len_trail] = ll ^ 1;
+                        self.vars[ll as usize >> 1].val =
+                            ((2 * self.decision_level) + ((ll ^ 1) & 1)) as i32;
+                        self.vars[ll as usize >> 1].tloc = self.len_trail as i32;
+                        // is this right? why not complemented?
+                        self.len_trail += 1;
+                        // TODO make this a parameter
+                        self.scaling_factor /= 0.95;
+
+                        State::C3
                     } else {
                         State::C2
                     }
@@ -771,7 +820,9 @@ mod tests {
         });
 
         let mut solver = CDCLSolver::new(9);
-        solver.solve(problem);
+        let result = solver.solve(problem);
+
+        println!("{} {}", result, solver.M);
     }
 
     #[test]
