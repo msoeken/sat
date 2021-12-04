@@ -66,7 +66,6 @@ struct Variable {
 enum State {
     C2,
     C3,
-    C4,
     C5,
     C6,
     C7,
@@ -132,105 +131,11 @@ impl CDCLSolver {
                     l = self.trail[self.len_forced];
                     self.len_forced += 1;
 
-                    // do step C4 for all c in the watch list of \bar l
-                    let mut q = 0;
-                    let mut c = self.watch[l as usize ^ 1];
-
-                    self.show_watched_lists();
-                    self.show_trail();
-
-                    println!(
-                        "Iterate through clauses watched by {}, starting with {}",
-                        Self::lit_to_str(l ^ 1),
-                        c
-                    );
-
-                    while c != 0 {
-                        println!("Handle clause {}: {:?}", c, Clause::new(self, c));
-                        self.show_trail();
-
-                        if self.clause_lit(c, 0) == (l ^ 1) {
-                            // reorder clause (l0 with l1, and watch0 with watch1)
-                            self.mem.swap(c as usize, c as usize + 1);
-                            self.mem.swap(c as usize - 3, c as usize - 2);
-
-                            println!("  reordered clause: {:?}", Clause::new(self, c));
-                        }
-
-                        let cc = self.clause_watch1(c);
-
-                        println!("  potential next clause is {}", cc);
-
-                        // Now l_0 is the "other" watched literal, check whether a decision has been made for l_0
-                        let l0 = self.clause_lit(c, 0);
-                        if self.is_lit_true(l0) {
-                            // l_0 is already true, and therefore the clause is satisfied
-                            // (*)
-                            if q != 0 {
-                                self.mem[q as usize - 3] = c;
-                            } else {
-                                self.watch[l as usize ^ 1] = c;
-                                q = c;
-                            }
-                        } else {
-                            println!("  l0 = {} is not true, search for lj", Self::lit_to_str(l0));
-                            // iterate through each decided false literal in the clause
-                            if let Some(j) = (2..self.clause_len(c))
-                                .find(|&j| !self.is_lit_false(self.clause_lit(c, j)))
-                            {
-                                // We have found some undecided literal lj
-                                // (where j >= 2).  Move current clause c into
-                                // the watch list of that literal and re-order
-                                // clause accordingly.
-
-                                // we found some undecided lj, so watch clause on lj
-                                // swap lj with l1
-                                self.mem.swap((c + 1) as usize, (c + j) as usize);
-
-                                let l1 = self.clause_lit(c, 1) as usize;
-                                self.mem[c as usize - 3] = self.watch[l1];
-                                self.watch[l1] = c;
-                            } else {
-                                // (*)
-                                if q != 0 {
-                                    self.mem[q as usize - 3] = c;
-                                } else {
-                                    self.watch[l as usize ^ 1] = c;
-                                    q = c;
-                                }
-
-                                println!(
-                                    "  Next decision depends on l0 = {}, does l0 have a value?",
-                                    Self::lit_to_str(l0)
-                                );
-
-                                assert_eq!(l0, self.clause_lit(c, 0));
-                                if self.vars[l0 as usize >> 1].val >= 0 {
-                                    todo!("conflict");
-                                } else {
-                                    println!("  l0 has no value, so it should be forced");
-
-                                    self.trail[self.len_trail] = l0;
-                                    let var = &mut self.vars[l0 as usize >> 1];
-                                    var.tloc = self.len_trail as i32;
-                                    var.val = (2 * self.decision_level + (l0 & 1)) as i32;
-                                    self.reasons[l0 as usize] = c;
-                                    self.len_trail += 1;
-                                }
-                            }
-                        }
-
-                        c = cc;
-                    }
-
-                    // (*)
-                    if q != 0 {
-                        self.mem[q as usize - 3] = c;
+                    if self.propagate(l) {
+                        State::C2
                     } else {
-                        self.watch[l as usize ^ 1] = c;
+                        State::C7
                     }
-
-                    State::C2
                 }
 
                 State::C5 => {
@@ -264,6 +169,10 @@ impl CDCLSolver {
 
                         State::C3
                     }
+                }
+
+                State::C7 => {
+                    todo!("conflict");
                 }
 
                 _ => todo!(),
@@ -445,6 +354,110 @@ impl CDCLSolver {
         );
 
         k
+    }
+
+    /// Propagates the most recent decision `l` and forces units, returns false
+    /// if a conflict is detected
+    fn propagate(&mut self, l: u32) -> bool {
+        // do step C4 for all c in the watch list of \bar l
+        let mut q = 0;
+        let mut c = self.watch[l as usize ^ 1];
+
+        self.show_watched_lists();
+        self.show_trail();
+
+        println!(
+            "Iterate through clauses watched by {}, starting with {}",
+            Self::lit_to_str(l ^ 1),
+            c
+        );
+
+        while c != 0 {
+            println!("Handle clause {}: {:?}", c, Clause::new(self, c));
+            self.show_trail();
+
+            if self.clause_lit(c, 0) == (l ^ 1) {
+                // reorder clause (l0 with l1, and watch0 with watch1)
+                self.mem.swap(c as usize, c as usize + 1);
+                self.mem.swap(c as usize - 3, c as usize - 2);
+
+                println!("  reordered clause: {:?}", Clause::new(self, c));
+            }
+
+            let cc = self.clause_watch1(c);
+
+            println!("  potential next clause is {}", cc);
+
+            // Now l_0 is the "other" watched literal, check whether a decision has been made for l_0
+            let l0 = self.clause_lit(c, 0);
+            if self.is_lit_true(l0) {
+                // l_0 is already true, and therefore the clause is satisfied
+                // (*)
+                if q != 0 {
+                    self.mem[q as usize - 3] = c;
+                } else {
+                    self.watch[l as usize ^ 1] = c;
+                    q = c;
+                }
+            } else {
+                println!("  l0 = {} is not true, search for lj", Self::lit_to_str(l0));
+                // iterate through each decided false literal in the clause
+                if let Some(j) =
+                    (2..self.clause_len(c)).find(|&j| !self.is_lit_false(self.clause_lit(c, j)))
+                {
+                    // We have found some undecided literal lj
+                    // (where j >= 2).  Move current clause c into
+                    // the watch list of that literal and re-order
+                    // clause accordingly.
+
+                    // we found some undecided lj, so watch clause on lj
+                    // swap lj with l1
+                    self.mem.swap((c + 1) as usize, (c + j) as usize);
+
+                    let l1 = self.clause_lit(c, 1) as usize;
+                    self.mem[c as usize - 3] = self.watch[l1];
+                    self.watch[l1] = c;
+                } else {
+                    // (*)
+                    if q != 0 {
+                        self.mem[q as usize - 3] = c;
+                    } else {
+                        self.watch[l as usize ^ 1] = c;
+                        q = c;
+                    }
+
+                    println!(
+                        "  Next decision depends on l0 = {}, does l0 have a value?",
+                        Self::lit_to_str(l0)
+                    );
+
+                    assert_eq!(l0, self.clause_lit(c, 0));
+                    if self.vars[l0 as usize >> 1].val >= 0 {
+                        return false;
+                    } else {
+                        println!("  l0 has no value, so it should be forced");
+
+                        self.trail[self.len_trail] = l0;
+                        let var = &mut self.vars[l0 as usize >> 1];
+                        var.tloc = self.len_trail as i32;
+                        var.val = (2 * self.decision_level + (l0 & 1)) as i32;
+                        self.reasons[l0 as usize] = c;
+                        self.len_trail += 1;
+                    }
+                }
+            }
+
+            c = cc;
+        }
+
+        // (*)
+        if q != 0 {
+            self.mem[q as usize - 3] = c;
+        } else {
+            self.watch[l as usize ^ 1] = c;
+        }
+
+        true
     }
 
     /// Initializes the heap as a random permutation over ${1, ..., n}$ based on
