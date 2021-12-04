@@ -175,13 +175,9 @@ impl CDCLSolver {
                         } else {
                             println!("  l0 = {} is not true, search for lj", Self::lit_to_str(l0));
                             // iterate through each decided false literal in the clause
-                            let mut j = 2;
-                            while j < self.clause_len(c) && self.is_lit_false(self.clause_lit(c, j))
+                            if let Some(j) = (2..self.clause_len(c))
+                                .find(|&j| !self.is_lit_false(self.clause_lit(c, j)))
                             {
-                                j += 1;
-                            }
-
-                            if j < self.clause_len(c) {
                                 // We have found some undecided literal lj
                                 // (where j >= 2).  Move current clause c into
                                 // the watch list of that literal and re-order
@@ -195,8 +191,6 @@ impl CDCLSolver {
                                 self.mem[c as usize - 3] = self.watch[l1];
                                 self.watch[l1] = c;
                             } else {
-                                assert_eq!(j, self.clause_len(c));
-
                                 // (*)
                                 if q != 0 {
                                     self.mem[q as usize - 3] = c;
