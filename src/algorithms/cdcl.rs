@@ -1,5 +1,9 @@
+use std::fmt::Debug;
+
 use itertools::Itertools;
-use rand::{thread_rng, Rng};
+use rand::{prelude::StdRng, thread_rng, Rng, SeedableRng};
+
+use crate::Solver;
 
 #[derive(Default)]
 pub struct CDCLSolver {
@@ -24,17 +28,63 @@ pub struct CDCLSolver {
     /// Watch list, indexed from 2..=2n + 1
     watch: Vec<u32>,
 
-    /// Length of the trail $F$
+    /// Literal trail $L$
+    trail: Vec<u32>,
+
+    /// Length of the trail $F$, indexed from 0..=n (one additional item for possible final conflict)
     len_trail: usize,
+
+    /// Length of forced literals $G$
+    len_forced: usize,
+
+    /// List of decision time points $i_d$
+    decisions: Vec<usize>,
+
+    /// Decision level $d$
+    decision_level: u32,
+
+    /// Reasons for literal in trail $R_l$, indexed from 2..=2n + 1
+    reasons: Vec<u32>,
+
+    s: u32,
+    M: u32,
+    h: u32,
+    DEL: u32,
 }
 
-#[derive(Default, Clone)]
+#[derive(Clone)]
 struct Variable {
     stamp: u32,
     val: i32,
-    tloc: u32,
-    hloc: u32,
+    /// control the polarity of a new decision
+    oval: i32,
+    tloc: i32,
+    hloc: i32,
     act: u32,
+}
+
+enum State {
+    C2,
+    C3,
+    C4,
+    C5,
+    C6,
+    C7,
+    C8,
+    C9,
+}
+
+impl Default for Variable {
+    fn default() -> Self {
+        Self {
+            stamp: 0,
+            val: -1,
+            oval: -1,
+            tloc: -1,
+            hloc: Default::default(),
+            act: 0,
+        }
+    }
 }
 
 impl CDCLSolver {
@@ -44,13 +94,232 @@ impl CDCLSolver {
             vars: vec![Default::default(); num_vars + 1],
             heap: vec![0; num_vars],
             watch: vec![0; (2 + 1) * num_vars],
+            trail: vec![0; num_vars + 1],
+            decisions: Vec::with_capacity(num_vars),
+            reasons: vec![0; (2 + 1) * num_vars],
             ..Default::default()
         }
     }
 
-    pub fn solve(&mut self, problem: impl Iterator<Item = impl Iterator<Item = u32>>) {
-        self.initialize_heap();
-        self.initialize_mem(problem);
+    pub fn solve(&mut self, problem: impl Iterator<Item = impl Iterator<Item = u32>>) -> bool {
+        if !self.initialize(problem) {
+            return false;
+        }
+
+        self.show_mem();
+        self.show_watched_lists();
+
+        self.sanity_check();
+
+        // global? variables
+        let mut l;
+        let mut q;
+        let mut c;
+
+        let mut current = State::C2;
+
+        loop {
+            current = match current {
+                State::C2 => {
+                    // [Level complete?]
+                    if self.len_forced == self.len_trail {
+                        State::C5
+                    } else {
+                        State::C3
+                    }
+                }
+
+                State::C3 => {
+                    // [Advance G.]
+                    l = self.trail[self.len_forced];
+                    self.len_forced += 1;
+
+                    // do step C4 for all c in the watch list of \bar l
+                    q = 0;
+                    c = self.watch[l as usize ^ 1];
+
+                    self.show_watched_lists();
+                    self.show_trail();
+
+                    println!(
+                        "Iterate through clauses watched by {}, starting with {}",
+                        Self::lit_to_str(l ^ 1),
+                        c
+                    );
+
+                    println!();
+
+                    while c != 0 {
+                        println!("Handle clause {}: {:?}", c, Clause::new(self, c));
+                        self.show_trail();
+
+                        let mut ll = self.clause_lit(c, 0);
+                        let cc;
+                        if ll != (l ^ 1) {
+                            cc = self.clause_watch1(c);
+                        } else {
+                            // TODO simplify with swaps?
+                            // reorder clause
+                            ll = self.clause_lit(c, 1);
+                            self.mem[c as usize] = ll;
+                            self.mem[c as usize + 1] = l ^ 1;
+                            cc = self.clause_watch0(c);
+                            self.mem[c as usize - 2] = self.clause_watch1(c);
+                            self.mem[c as usize - 3] = cc;
+
+                            println!("  reordered clause: {:?}", Clause::new(self, c));
+                        }
+
+                        println!("  potential next clause is {}", cc);
+
+                        // Now l_0 is the "other" watched literal, check whether a decision has been made for l_0
+                        let l0 = self.clause_lit(c, 0);
+                        if self.is_lit_true(l0) {
+                            // l_0 is already true, and therefore the clause is satisfied
+                            // (*)
+                            if q != 0 {
+                                self.mem[q as usize - 3] = c;
+                            } else {
+                                self.watch[l as usize ^ 1] = c;
+                                q = c;
+                            }
+                        } else {
+                            println!("  l0 = {} is not true, search for lj", Self::lit_to_str(l0));
+                            // iterate through each decided false literal in the clause
+                            let mut j = 2;
+                            while j < self.clause_len(c) && self.is_lit_false(self.clause_lit(c, j))
+                            {
+                                j += 1;
+                            }
+
+                            println!("  j = {}", j);
+
+                            if j < self.clause_len(c) {
+                                assert_eq!(self.clause_lit(c, 1), l ^ 1);
+
+                                // we found some undecided lj, so watch clause on lj
+                                // swap lj with l1
+                                self.mem[c as usize + 1] = self.clause_lit(c, j);
+                                self.mem[(c + j) as usize] = l ^ 1;
+
+                                let l1 = self.clause_lit(c, 1) as usize;
+                                self.mem[c as usize - 3] = self.watch[l1];
+                                self.watch[l1] = c;
+                            } else {
+                                assert_eq!(j, self.clause_len(c));
+
+                                // (*)
+                                if q != 0 {
+                                    self.mem[q as usize - 3] = c;
+                                } else {
+                                    self.watch[l as usize ^ 1] = c;
+                                    q = c;
+                                }
+
+                                println!(
+                                    "  Next decision depends on l0 = {}, does l0 have a value?",
+                                    Self::lit_to_str(l0)
+                                );
+
+                                assert_eq!(l0, self.clause_lit(c, 0));
+                                if self.vars[l0 as usize >> 1].val >= 0 {
+                                    todo!("conflict");
+                                } else {
+                                    println!("  l0 has no value, so it should be forced");
+
+                                    self.trail[self.len_trail] = l0;
+                                    let var = &mut self.vars[l0 as usize >> 1];
+                                    var.tloc = self.len_trail as i32;
+                                    var.val = (2 * self.decision_level + (l0 & 1)) as i32;
+                                    self.reasons[l0 as usize] = c;
+                                    self.len_trail += 1;
+                                }
+                            }
+                        }
+
+                        c = cc;
+                    }
+
+                    // (*)
+                    if q != 0 {
+                        self.mem[q as usize - 3] = c;
+                    } else {
+                        self.watch[l as usize ^ 1] = c;
+                    }
+
+                    State::C2
+                }
+
+                State::C5 => {
+                    // [New level?]
+                    if self.len_trail == self.num_vars {
+                        return true;
+                    }
+
+                    // TODO purge excess clauses
+                    // TODO flush literals
+                    self.decision_level += 1;
+                    self.decisions.push(self.len_trail);
+                    State::C6
+                }
+
+                State::C6 => {
+                    let k = self.decide();
+                    if self.vars[k as usize].val >= 0 {
+                        State::C6
+                    } else {
+                        let l = (2 * k + (self.vars[k as usize].oval as u32 & 1)) as u32;
+                        self.vars[k as usize].val = (2 * self.decision_level
+                            + (self.vars[k as usize].oval as u32 & 1))
+                            as i32;
+                        // TODO set Lf
+                        self.trail[self.len_trail] = l;
+                        self.vars[k as usize].tloc = self.len_trail as i32;
+                        self.reasons[l as usize] = 0;
+                        self.len_trail += 1;
+                        assert_eq!(self.len_trail, self.len_forced + 1);
+
+                        State::C3
+                    }
+                }
+
+                _ => todo!(),
+            }
+        }
+
+        true
+    }
+
+    #[inline]
+    fn clause_lit(&self, c: u32, j: u32) -> u32 {
+        self.mem[(c + j) as usize]
+    }
+
+    #[inline]
+    fn clause_len(&self, c: u32) -> u32 {
+        self.mem[c as usize - 1]
+    }
+
+    #[inline]
+    fn clause_watch0(&self, c: u32) -> u32 {
+        self.mem[c as usize - 2]
+    }
+
+    #[inline]
+    fn clause_watch1(&self, c: u32) -> u32 {
+        self.mem[c as usize - 3]
+    }
+
+    #[inline]
+    fn is_lit_true(&self, l: u32) -> bool {
+        let val = self.vars[l as usize >> 1].val;
+        val >= 0 && (val as u32 + l) % 2 == 0
+    }
+
+    #[inline]
+    fn is_lit_false(&self, l: u32) -> bool {
+        let val = self.vars[l as usize >> 1].val;
+        val >= 0 && (val as u32 + l) % 2 == 1
     }
 
     pub fn show_mem(&self) {
@@ -69,16 +338,39 @@ impl CDCLSolver {
         }
     }
 
+    fn lit_to_str(lit: u32) -> String {
+        format!("{}{}", if lit & 1 == 1 { "!" } else { "" }, lit >> 1)
+    }
+
+    fn show_trail(&self) {
+        println!(" t   L_t   level   reason");
+        for t in 0..self.len_trail {
+            let lit = self.trail[t];
+            let reason = self.reasons[lit as usize];
+            println!(
+                "{:>2}   {:>3}   {:>5}   {}",
+                t,
+                Self::lit_to_str(lit),
+                self.vars[(lit >> 1) as usize].val >> 1,
+                if reason == 0 {
+                    "Λ".into()
+                } else {
+                    format!("{:?}", Clause::new(self, self.reasons[lit as usize]))
+                }
+            );
+        }
+    }
+
     pub fn show_watched_lists(&self) {
         for l in 2..=2 * self.num_vars + 1 {
-            print!("W[{}] =", l);
+            print!("W[{:>4}] =", Self::lit_to_str(l as u32));
 
             let mut c = self.watch[l];
 
             while c != 0 {
                 print!(" {} (", c);
                 for cl in 0..self.mem[c as usize - 1] {
-                    print!(" {}", self.mem[(c + cl) as usize]);
+                    print!(" {}", Self::lit_to_str(self.mem[(c + cl) as usize]));
                 }
                 c = if self.mem[c as usize] == l as u32 {
                     self.mem[(c - 2) as usize]
@@ -93,12 +385,92 @@ impl CDCLSolver {
         }
     }
 
+    fn sanity_check(&self) {
+        for k in 1..self.num_vars {
+            if self.vars[k].hloc != -1 {
+                assert_eq!(self.heap[self.vars[k].hloc as usize], k as u32);
+            }
+        }
+
+        assert_eq!(self.decisions.len(), self.decision_level as usize + 1);
+    }
+
+    fn initialize(&mut self, problem: impl Iterator<Item = impl Iterator<Item = u32>>) -> bool {
+        self.initialize_heap();
+        if !self.initialize_mem(problem) {
+            return false;
+        }
+
+        self.decisions.push(0);
+        self.decision_level = 0;
+        self.s = 0;
+        self.M = 0;
+        self.len_forced = 0;
+        self.h = self.num_vars as u32;
+        self.DEL = 1;
+
+        true
+    }
+
+    fn decide(&mut self) -> u32 {
+        // [Make a decision.]
+        println!(
+            "make a decision at decision level {}. Current trail length is {}.",
+            self.decision_level, self.len_trail
+        );
+
+        let k = self.heap[0];
+
+        // delete k from heap (Exercise 262 and 266.)
+        self.h -= 1;
+        self.vars[k as usize].hloc = -1;
+
+        if self.h == 0 {
+            return k;
+        }
+
+        let i = self.heap[self.h as usize] as usize;
+        let alpha = self.vars[i].act;
+        let mut j = 0;
+        let mut jj = 1usize;
+
+        while jj < self.h as usize {
+            let mut alpha2 = self.vars[self.heap[jj] as usize].act;
+            if jj + 1 < self.h as usize && self.vars[self.heap[jj + 1] as usize].act > alpha2 {
+                jj += 1;
+                alpha2 = self.vars[self.heap[jj] as usize].act;
+            }
+            if alpha > alpha2 {
+                jj = self.h as usize;
+            } else {
+                self.heap[j] = self.heap[jj];
+                self.vars[self.heap[jj] as usize].hloc = j as i32;
+                j = jj;
+                jj = 2 * j + 1;
+            }
+        }
+
+        // NOTE: should this be part of the loop above?
+        self.heap[j] = i as u32;
+        self.vars[i].hloc = j as i32;
+
+        println!(
+            "heap = {:?}, h = {}, k = {}",
+            &self.heap[0..self.h as usize],
+            self.h,
+            k
+        );
+
+        k
+    }
+
     /// Initializes the heap as a random permutation over ${1, ..., n}$ based on
     /// a variant of Algorithm 3.4.2P.
     ///
     /// This is described in Exercise 7.2.2.2-260.
     fn initialize_heap(&mut self) {
-        let mut rng = thread_rng();
+        //let mut rng = thread_rng();
+        let mut rng = StdRng::seed_from_u64(655341);
         for k in 1..=self.num_vars {
             let j = rng.gen_range(0..k);
 
@@ -107,7 +479,7 @@ impl CDCLSolver {
         }
 
         for j in 0..self.num_vars {
-            self.vars[self.heap[j] as usize].hloc = j as u32;
+            self.vars[self.heap[j] as usize].hloc = j as i32;
         }
     }
 
@@ -135,7 +507,7 @@ impl CDCLSolver {
 
                 if val < 0 {
                     self.vars[var].val = (clause[0] & 1) as i32;
-                    self.vars[var].tloc = self.len_trail as u32;
+                    self.vars[var].tloc = self.len_trail as i32;
                     self.len_trail += 1;
                 }
             } else {
@@ -178,6 +550,36 @@ impl CDCLSolver {
     }
 }
 
+struct Clause<'a> {
+    solver: &'a CDCLSolver,
+    clause: usize,
+    len: usize,
+}
+
+impl<'a> Clause<'a> {
+    pub fn new(solver: &'a CDCLSolver, clause: u32) -> Self {
+        Self {
+            solver,
+            clause: clause as usize,
+            len: solver.mem[clause as usize - 1] as usize,
+        }
+    }
+}
+
+impl Debug for Clause<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "(")?;
+        for j in 0..self.len {
+            write!(
+                f,
+                " {}",
+                CDCLSolver::lit_to_str(self.solver.mem[self.clause + j])
+            )?;
+        }
+        write!(f, " )")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use rand::Rng;
@@ -195,9 +597,6 @@ mod tests {
 
         let mut solver = CDCLSolver::new(9);
         solver.solve(problem);
-
-        solver.show_mem();
-        solver.show_watched_lists();
     }
 
     #[test]
