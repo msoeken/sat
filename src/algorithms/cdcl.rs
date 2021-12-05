@@ -1,7 +1,8 @@
-use std::{fmt::Debug, thread::JoinHandle};
+use std::fmt::Debug;
 
 use itertools::Itertools;
-use rand::{prelude::StdRng, thread_rng, Rng, SeedableRng};
+use log::info;
+use rand::{prelude::StdRng, Rng, SeedableRng};
 
 #[derive(Default)]
 pub struct CDCLSolver {
@@ -46,8 +47,12 @@ pub struct CDCLSolver {
 
     /// Unique stamp number $s$
     stamp: u32,
-    M: u32,
-    h: u32,
+
+    /// Number of learned clauses $M$
+    num_learned: u32,
+
+    /// Heap size $h$
+    len_heap: u32,
 
     /// Activity scaling factor DEL
     scaling_factor: f64,
@@ -109,9 +114,6 @@ impl CDCLSolver {
             return false;
         }
 
-        self.show_mem();
-        self.show_watched_lists();
-
         self.sanity_check();
 
         // global? variables
@@ -146,9 +148,6 @@ impl CDCLSolver {
                         // [C8. Backjump.]
                         let bound = self.decisions[dd as usize + 1].time as usize;
 
-                        println!("L = {}, bound = {}", self.len_trail, bound);
-                        self.show_heap();
-
                         while self.len_trail > bound {
                             self.len_trail -= 1;
                             let l = self.trail[self.len_trail];
@@ -157,10 +156,10 @@ impl CDCLSolver {
                             self.vars[k as usize].val = -1;
                             self.reasons[l as usize] = 0;
                             if self.vars[k as usize].hloc < 0 {
-                                println!("  insert {} into HEAP", k);
+                                // insert k into heap
                                 let alpha = self.vars[k as usize].act;
-                                let j = self.h;
-                                self.h += 1;
+                                let j = self.len_heap;
+                                self.len_heap += 1;
                                 if j == 0 {
                                     self.heap[0] = k;
                                     self.vars[k as usize].hloc = 0;
@@ -174,9 +173,6 @@ impl CDCLSolver {
                         self.decision_level = dd;
 
                         // [C9. Learn.]
-                        self.show_mem();
-                        println!("MAXL = {}", self.maxl);
-
                         if self.decision_level > 0 {
                             let c = self.maxl;
                             // MEM may grow a bit larger, but we keep MAXL correct to be able to ignore this
@@ -208,14 +204,13 @@ impl CDCLSolver {
                             self.mem[c - 1] = k as u32 + 1;
                             self.maxl = c + k + 6;
 
-                            self.show_mem();
                             self.reasons[ll as usize] = c as u32;
                         } else {
                             // new decision (invert literal at level 0)
                             self.reasons[ll as usize] = 0;
                         }
 
-                        self.M += 1;
+                        self.num_learned += 1;
                         self.trail[self.len_trail] = ll ^ 1;
                         self.vars[ll as usize >> 1].val =
                             ((2 * self.decision_level) + ((ll ^ 1) & 1)) as i32;
@@ -246,6 +241,11 @@ impl CDCLSolver {
 
                 State::C6 => {
                     let k = self.decide();
+                    info!(
+                        "decision at level {}, F = {}, k = {}",
+                        self.decision_level, self.len_trail, k
+                    );
+
                     if self.vars[k as usize].val >= 0 {
                         State::C6
                     } else {
@@ -263,8 +263,6 @@ impl CDCLSolver {
                         State::C3
                     }
                 }
-
-                _ => todo!(),
             }
         }
     }
@@ -279,6 +277,7 @@ impl CDCLSolver {
         self.mem[c as usize - 1]
     }
 
+    #[allow(dead_code)]
     #[inline]
     fn clause_watch0(&self, c: u32) -> u32 {
         self.mem[c as usize - 2]
@@ -331,6 +330,7 @@ impl CDCLSolver {
         format!("{}{}", if lit & 1 == 1 { "!" } else { "" }, lit >> 1)
     }
 
+    #[allow(dead_code)]
     fn show_trail(&self) {
         println!(" t   TLOC   L_t   level   reason");
         for t in 0..self.len_trail {
@@ -378,8 +378,8 @@ impl CDCLSolver {
     fn show_heap(&self) {
         println!(
             "heap = {:?}, h = {}",
-            &self.heap[0..self.h as usize],
-            self.h,
+            &self.heap[0..self.len_heap as usize],
+            self.len_heap,
         );
     }
 
@@ -400,9 +400,9 @@ impl CDCLSolver {
         self.decisions[0].time = 0;
         self.decision_level = 0;
         self.stamp = 0;
-        self.M = 0;
+        self.num_learned = 0;
         self.len_forced = 0;
-        self.h = self.num_vars as u32;
+        self.len_heap = self.num_vars as u32;
         self.scaling_factor = 1.0;
 
         true
@@ -410,34 +410,30 @@ impl CDCLSolver {
 
     fn decide(&mut self) -> u32 {
         // [Make a decision.]
-        println!(
-            "make a decision at decision level {}. Current trail length is {}.",
-            self.decision_level, self.len_trail
-        );
-
         let k = self.heap[0];
 
         // delete k from heap (Exercise 262 and 266.)
-        self.h -= 1;
+        self.len_heap -= 1;
         self.vars[k as usize].hloc = -1;
 
-        if self.h == 0 {
+        if self.len_heap == 0 {
             return k;
         }
 
-        let i = self.heap[self.h as usize] as usize;
+        let i = self.heap[self.len_heap as usize] as usize;
         let alpha = self.vars[i].act;
         let mut j = 0;
         let mut jj = 1usize;
 
-        while jj < self.h as usize {
+        while jj < self.len_heap as usize {
             let mut alpha2 = self.vars[self.heap[jj] as usize].act;
-            if jj + 1 < self.h as usize && self.vars[self.heap[jj + 1] as usize].act > alpha2 {
+            if jj + 1 < self.len_heap as usize && self.vars[self.heap[jj + 1] as usize].act > alpha2
+            {
                 jj += 1;
                 alpha2 = self.vars[self.heap[jj] as usize].act;
             }
             if alpha > alpha2 {
-                jj = self.h as usize;
+                jj = self.len_heap as usize;
             } else {
                 self.heap[j] = self.heap[jj];
                 self.vars[self.heap[jj] as usize].hloc = j as i32;
@@ -450,9 +446,6 @@ impl CDCLSolver {
         self.heap[j] = i as u32;
         self.vars[i].hloc = j as i32;
 
-        self.show_heap();
-        println!("k = {}", k);
-
         k
     }
 
@@ -460,33 +453,20 @@ impl CDCLSolver {
     /// if a conflict is detected
     fn propagate(&mut self, l: u32) -> Option<u32> {
         // do step C4 for all c in the watch list of \bar l
+
+        // iterate through all clauses watched by l ^ 1; q points to last c in
+        // loop to update watch lists
         let mut q = 0;
         let mut c = self.watch[l as usize ^ 1];
 
-        self.show_watched_lists();
-        self.show_trail();
-
-        println!(
-            "Iterate through clauses watched by {}, starting with {}",
-            Self::lit_to_str(l ^ 1),
-            c
-        );
-
         while c != 0 {
-            println!("Handle clause {}: {:?}", c, self.clause(c));
-            self.show_trail();
-
             if self.clause_lit(c, 0) == (l ^ 1) {
                 // reorder clause (l0 with l1, and watch0 with watch1)
                 self.mem.swap(c as usize, c as usize + 1);
                 self.mem.swap(c as usize - 3, c as usize - 2);
-
-                println!("  reordered clause: {:?}", self.clause(c));
             }
 
             let cc = self.clause_watch1(c);
-
-            println!("  potential next clause is {}", cc);
 
             // Now l_0 is the "other" watched literal, check whether a decision has been made for l_0
             let l0 = self.clause_lit(c, 0);
@@ -500,8 +480,7 @@ impl CDCLSolver {
                     q = c;
                 }
             } else {
-                println!("  l0 = {} is not true, search for lj", Self::lit_to_str(l0));
-                // iterate through each decided false literal in the clause
+                // l_0 is not true, so let's check for an undecided literal lj
                 if let Some(j) =
                     (2..self.clause_len(c)).find(|&j| !self.is_lit_false(self.clause_lit(c, j)))
                 {
@@ -526,16 +505,18 @@ impl CDCLSolver {
                         q = c;
                     }
 
-                    println!(
-                        "  Next decision depends on l0 = {}, does l0 have a value?",
-                        Self::lit_to_str(l0)
-                    );
-
-                    assert_eq!(l0, self.clause_lit(c, 0));
+                    // if l0 has a value (i.e., it is false we have found
+                    // conflict with l0 as conflict literal)
                     if self.vars[l0 as usize >> 1].val >= 0 {
                         return Some(c);
                     } else {
-                        println!("  l0 has no value, so it should be forced");
+                        // if l0 has no value we force it
+                        info!(
+                            "force unit {} at level {}, F = {}",
+                            Self::lit_to_str(l0),
+                            self.decision_level,
+                            self.len_trail
+                        );
 
                         self.trail[self.len_trail] = l0;
                         let var = &mut self.vars[l0 as usize >> 1];
@@ -580,8 +561,6 @@ impl CDCLSolver {
             t = std::cmp::max(t, self.vars[lj as usize >> 1].tloc);
         }
 
-        println!("   currently in b = {:?}, t = {}", new_clause, t);
-
         while q > 0 {
             let l = self.trail[t as usize];
             t -= 1;
@@ -604,16 +583,16 @@ impl CDCLSolver {
             ll = self.trail[t as usize];
         }
 
-        println!(
-            "conflict clause = {:?}, q = {}, b = {:?}, ll = {}, t = {}",
+        info!(
+            "computed conflict clause from {:?}: b = {:?}, ll = {}, t = {}, d' = {}",
             self.clause(c),
-            q,
             new_clause
                 .iter()
                 .map(|&l| Self::lit_to_str(l))
                 .collect_vec(),
             Self::lit_to_str(ll),
-            t
+            t,
+            dd
         );
 
         // TODO check for redundancies (Exercise 257)
@@ -812,6 +791,8 @@ mod tests {
 
     #[test]
     fn test_waerden339() {
+        test_logger::ensure_env_logger_initialized();
+
         let waerden = waerden(3, 3, 9);
         let problem = waerden.iter().map(|clause| {
             clause
@@ -820,9 +801,25 @@ mod tests {
         });
 
         let mut solver = CDCLSolver::new(9);
-        let result = solver.solve(problem);
+        assert!(!solver.solve(problem));
+    }
 
-        println!("{} {}", result, solver.M);
+    #[test]
+    fn test_waerden33() {
+        test_logger::ensure_env_logger_initialized();
+
+        for n in 3..=9 {
+            let waerden = waerden(3, 3, n);
+            let problem = waerden.iter().map(|clause| {
+                clause
+                    .iter()
+                    .map(|&l| (l.abs() * 2 + if l < 0 { 1 } else { 0 }) as u32)
+            });
+
+            let mut solver = CDCLSolver::new(n);
+
+            assert_eq!(solver.solve(problem), n < 9, "invalid result for n = {}", n);
+        }
     }
 
     #[test]
