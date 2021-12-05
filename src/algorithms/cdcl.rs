@@ -2,7 +2,10 @@ use std::fmt::Debug;
 
 use itertools::Itertools;
 use log::info;
-use rand::{prelude::StdRng, Rng, SeedableRng};
+
+use self::heap::Heap;
+
+mod heap;
 
 #[derive(Default)]
 pub struct CDCLSolver {
@@ -22,7 +25,7 @@ pub struct CDCLSolver {
     vars: Vec<Variable>,
 
     /// Heap for free variables, indexed from 0..n
-    heap: Vec<u32>,
+    heap: Heap,
 
     /// Watch list, indexed from 2..=2n + 1
     watch: Vec<u32>,
@@ -50,12 +53,6 @@ pub struct CDCLSolver {
 
     /// Number of learned clauses $M$
     num_learned: u32,
-
-    /// Heap size $h$
-    len_heap: u32,
-
-    /// Activity scaling factor DEL
-    scaling_factor: f64,
 }
 
 #[derive(Clone)]
@@ -65,8 +62,6 @@ struct Variable {
     /// control the polarity of a new decision
     oval: i32,
     tloc: i32,
-    hloc: i32,
-    act: f64,
 }
 
 #[derive(Default, Clone)]
@@ -89,8 +84,6 @@ impl Default for Variable {
             val: -1,
             oval: -1,
             tloc: -1,
-            hloc: Default::default(),
-            act: 0.0,
         }
     }
 }
@@ -100,7 +93,7 @@ impl CDCLSolver {
         Self {
             num_vars,
             vars: vec![Default::default(); num_vars + 1],
-            heap: vec![0; num_vars],
+            heap: Heap::new(num_vars),
             watch: vec![0; (2 + 1) * num_vars],
             trail: vec![0; num_vars + 1],
             decisions: vec![Default::default(); num_vars + 1],
@@ -155,18 +148,7 @@ impl CDCLSolver {
                             self.vars[k as usize].oval = self.vars[k as usize].val;
                             self.vars[k as usize].val = -1;
                             self.reasons[l as usize] = 0;
-                            if self.vars[k as usize].hloc < 0 {
-                                // insert k into heap
-                                let alpha = self.vars[k as usize].act;
-                                let j = self.len_heap;
-                                self.len_heap += 1;
-                                if j == 0 {
-                                    self.heap[0] = k;
-                                    self.vars[k as usize].hloc = 0;
-                                } else {
-                                    self.siftup(k, j as i32, alpha);
-                                }
-                            }
+                            self.heap.push(k);
                         }
 
                         self.len_forced = self.len_trail;
@@ -218,7 +200,7 @@ impl CDCLSolver {
                         // is this right? why not complemented?
                         self.len_trail += 1;
                         // TODO make this a parameter
-                        self.scaling_factor /= 0.95;
+                        self.heap.update_scaling_factor(0.95);
 
                         State::C3
                     } else {
@@ -240,7 +222,8 @@ impl CDCLSolver {
                 }
 
                 State::C6 => {
-                    let k = self.decide();
+                    // [Make a decision.]
+                    let k = self.heap.pop();
                     info!(
                         "decision at level {}, F = {}, k = {}",
                         self.decision_level, self.len_trail, k
@@ -375,24 +358,11 @@ impl CDCLSolver {
         }
     }
 
-    fn show_heap(&self) {
-        println!(
-            "heap = {:?}, h = {}",
-            &self.heap[0..self.len_heap as usize],
-            self.len_heap,
-        );
-    }
-
     fn sanity_check(&self) {
-        for k in 1..self.num_vars {
-            if self.vars[k].hloc != -1 {
-                assert_eq!(self.heap[self.vars[k].hloc as usize], k as u32);
-            }
-        }
+        self.heap.sanity_check();
     }
 
     fn initialize(&mut self, problem: impl Iterator<Item = impl Iterator<Item = u32>>) -> bool {
-        self.initialize_heap();
         if !self.initialize_mem(problem) {
             return false;
         }
@@ -402,51 +372,8 @@ impl CDCLSolver {
         self.stamp = 0;
         self.num_learned = 0;
         self.len_forced = 0;
-        self.len_heap = self.num_vars as u32;
-        self.scaling_factor = 1.0;
 
         true
-    }
-
-    fn decide(&mut self) -> u32 {
-        // [Make a decision.]
-        let k = self.heap[0];
-
-        // delete k from heap (Exercise 262 and 266.)
-        self.len_heap -= 1;
-        self.vars[k as usize].hloc = -1;
-
-        if self.len_heap == 0 {
-            return k;
-        }
-
-        let i = self.heap[self.len_heap as usize] as usize;
-        let alpha = self.vars[i].act;
-        let mut j = 0;
-        let mut jj = 1usize;
-
-        while jj < self.len_heap as usize {
-            let mut alpha2 = self.vars[self.heap[jj] as usize].act;
-            if jj + 1 < self.len_heap as usize && self.vars[self.heap[jj + 1] as usize].act > alpha2
-            {
-                jj += 1;
-                alpha2 = self.vars[self.heap[jj] as usize].act;
-            }
-            if alpha > alpha2 {
-                jj = self.len_heap as usize;
-            } else {
-                self.heap[j] = self.heap[jj];
-                self.vars[self.heap[jj] as usize].hloc = j as i32;
-                j = jj;
-                jj = 2 * j + 1;
-            }
-        }
-
-        // NOTE: should this be part of the loop above?
-        self.heap[j] = i as u32;
-        self.vars[i].hloc = j as i32;
-
-        k
     }
 
     /// Propagates the most recent decision `l` and forces units, returns false
@@ -603,36 +530,8 @@ impl CDCLSolver {
     /// Bump operation as described in Exercise 263 and 262.
     fn bump(&mut self, l: u32) {
         let k = l >> 1;
-        let del = self.scaling_factor;
 
-        let var = self.lit_var_mut(l);
-        let alpha = var.act;
-        var.act = alpha + del;
-        let j = self.vars[k as usize].hloc;
-        self.siftup(k, j, alpha);
-    }
-
-    /// Performs siftup operation described in Exercise 262.
-    fn siftup(&mut self, k: u32, mut j: i32, alpha: f64) {
-        if j > 0 {
-            // siftup
-            loop {
-                let jj = (j - 1) >> 1;
-                let i = self.heap[jj as usize];
-                if self.vars[i as usize].act >= alpha {
-                    break;
-                } else {
-                    self.heap[j as usize] = i;
-                    self.vars[i as usize].hloc = j;
-                    j = jj;
-                    if j == 0 {
-                        break;
-                    }
-                }
-            }
-            self.heap[j as usize] = k;
-            self.vars[k as usize].hloc = j;
-        }
+        self.heap.bump_activity(k);
     }
 
     /// Blit operation as described in Exercise 263.
@@ -664,25 +563,6 @@ impl CDCLSolver {
                     0
                 };
             }
-        }
-    }
-
-    /// Initializes the heap as a random permutation over ${1, ..., n}$ based on
-    /// a variant of Algorithm 3.4.2P.
-    ///
-    /// This is described in Exercise 7.2.2.2-260.
-    fn initialize_heap(&mut self) {
-        //let mut rng = thread_rng();
-        let mut rng = StdRng::seed_from_u64(655341);
-        for k in 1..=self.num_vars {
-            let j = rng.gen_range(0..k);
-
-            self.heap[k - 1] = self.heap[j];
-            self.heap[j] = k as u32;
-        }
-
-        for j in 0..self.num_vars {
-            self.vars[self.heap[j] as usize].hloc = j as i32;
         }
     }
 
