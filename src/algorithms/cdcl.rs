@@ -70,13 +70,6 @@ struct Decision {
     stamp: u32,
 }
 
-enum State {
-    C2,
-    C3,
-    C5,
-    C6,
-}
-
 impl Default for Variable {
     fn default() -> Self {
         Self {
@@ -107,145 +100,125 @@ impl CDCLSolver {
             return false;
         }
 
-        self.sanity_check();
-
-        // global? variables
-        let mut l;
-
-        let mut current = State::C2;
-
         loop {
-            current = match current {
-                State::C2 => {
-                    // [Level complete?]
-                    if self.len_forced == self.len_trail {
-                        State::C5
-                    } else {
-                        State::C3
-                    }
+            self.sanity_check();
+
+            // [Level complete?]
+            if self.len_forced == self.len_trail {
+                // [C5. New level?]
+                if self.len_trail == self.num_vars {
+                    return true;
                 }
 
-                State::C3 => {
-                    // [Advance G.]
-                    l = self.trail[self.len_forced];
-                    self.len_forced += 1;
+                // TODO purge excess clauses
+                // TODO flush literals
+                self.decision_level += 1;
+                self.decisions[self.decision_level as usize].time = self.len_trail as u32;
 
-                    if let Some(conflict_clause) = self.propagate(l) {
-                        // [C7. Resolve conflict.]
-                        if self.decision_level == 0 {
-                            return false;
-                        }
-
-                        let (ll, learned_rest, dd) = self.resolve_conflict_clause(conflict_clause);
-
-                        // [C8. Backjump.]
-                        let bound = self.decisions[dd as usize + 1].time as usize;
-
-                        while self.len_trail > bound {
-                            self.len_trail -= 1;
-                            let l = self.trail[self.len_trail];
-                            let k = l >> 1;
-                            self.vars[k as usize].oval = self.vars[k as usize].val;
-                            self.vars[k as usize].val = -1;
-                            self.reasons[l as usize] = 0;
-                            self.heap.push(k);
-                        }
-
-                        self.len_forced = self.len_trail;
-                        self.decision_level = dd;
-
-                        // [C9. Learn.]
-                        if self.decision_level > 0 {
-                            let c = self.maxl;
-                            // MEM may grow a bit larger, but we keep MAXL correct to be able to ignore this
-                            self.mem.resize(self.maxl + learned_rest.len() + 3, 0);
-                            // insert learned clause into MEM
-                            self.mem[c] = ll ^ 1;
-                            let mut k = 0;
-                            let mut jj = 1;
-                            for j in 1..=learned_rest.len() {
-                                let bj = learned_rest[j - 1];
-
-                                // here we compare the stamp again, making use of checking redundancies before
-                                if self.vars[bj as usize >> 1].stamp != self.stamp {
-                                    continue;
-                                }
-
-                                k += 1;
-                                if jj == 0 || (self.vars[bj as usize >> 1].val as u32 >> 1) < dd {
-                                    self.mem[c + k + jj] = bj ^ 1;
-                                } else {
-                                    self.mem[c + 1] = bj ^ 1;
-                                    jj = 0;
-                                    self.mem[c - 2] = self.watch[ll as usize ^ 1];
-                                    self.watch[ll as usize ^ 1] = c as u32;
-                                    self.mem[c - 3] = self.watch[bj as usize ^ 1];
-                                    self.watch[bj as usize ^ 1] = c as u32;
-                                }
-                            }
-                            self.mem[c - 1] = k as u32 + 1;
-                            self.maxl = c + k + 6;
-
-                            self.reasons[ll as usize] = c as u32;
-                        } else {
-                            // new decision (invert literal at level 0)
-                            self.reasons[ll as usize] = 0;
-                        }
-
-                        self.num_learned += 1;
-                        self.trail[self.len_trail] = ll ^ 1;
-                        self.vars[ll as usize >> 1].val =
-                            ((2 * self.decision_level) + ((ll ^ 1) & 1)) as i32;
-                        self.vars[ll as usize >> 1].tloc = self.len_trail as i32;
-                        // is this right? why not complemented?
-                        self.len_trail += 1;
-                        // TODO make this a parameter
-                        self.heap.update_scaling_factor(0.95);
-
-                        State::C3
-                    } else {
-                        State::C2
-                    }
-                }
-
-                State::C5 => {
-                    // [New level?]
-                    if self.len_trail == self.num_vars {
-                        return true;
-                    }
-
-                    // TODO purge excess clauses
-                    // TODO flush literals
-                    self.decision_level += 1;
-                    self.decisions[self.decision_level as usize].time = self.len_trail as u32;
-                    State::C6
-                }
-
-                State::C6 => {
-                    // [Make a decision.]
+                let k = loop {
+                    // [C6. Make a decision.]
                     let k = self.heap.pop();
                     info!(
                         "decision at level {}, F = {}, k = {}",
                         self.decision_level, self.len_trail, k
                     );
 
-                    if self.vars[k as usize].val >= 0 {
-                        State::C6
-                    } else {
-                        let l = (2 * k + (self.vars[k as usize].oval as u32 & 1)) as u32;
-                        self.vars[k as usize].val = (2 * self.decision_level
-                            + (self.vars[k as usize].oval as u32 & 1))
-                            as i32;
-                        // TODO set Lf
-                        self.trail[self.len_trail] = l;
-                        self.vars[k as usize].tloc = self.len_trail as i32;
-                        self.reasons[l as usize] = 0;
-                        self.len_trail += 1;
-                        assert_eq!(self.len_trail, self.len_forced + 1);
-
-                        State::C3
+                    // repeat, if variable was already decided
+                    if self.vars[k as usize].val < 0 {
+                        break k;
                     }
+                };
+
+                // decide polarity and update decision level and polarity
+                // information in variable
+                let l = (2 * k + (self.vars[k as usize].oval as u32 & 1)) as u32;
+                self.vars[k as usize].val =
+                    (2 * self.decision_level + (self.vars[k as usize].oval as u32 & 1)) as i32;
+
+                // insert literal into trail and update time stamp, reason is Λ
+                self.trail[self.len_trail] = l;
+                self.vars[k as usize].tloc = self.len_trail as i32;
+                self.reasons[l as usize] = 0;
+                self.len_trail += 1;
+                assert_eq!(self.len_trail, self.len_forced + 1);
+            }
+
+            // [C3. Advance G.]
+            while let Some(conflict_clause) = {
+                let l = self.trail[self.len_forced];
+                self.len_forced += 1;
+                self.propagate(l)
+            } {
+                // [C7. Resolve conflict.]
+                if self.decision_level == 0 {
+                    return false;
                 }
+
+                let (ll, learned_rest, dd) = self.resolve_conflict_clause(conflict_clause);
+
+                // [C8. Backjump.]
+                let bound = self.decisions[dd as usize + 1].time as usize;
+
+                while self.len_trail > bound {
+                    self.len_trail -= 1;
+                    let l = self.trail[self.len_trail];
+                    let k = l >> 1;
+                    self.vars[k as usize].oval = self.vars[k as usize].val;
+                    self.vars[k as usize].val = -1;
+                    self.reasons[l as usize] = 0;
+                    self.heap.push(k);
+                }
+
+                self.len_forced = self.len_trail;
+                self.decision_level = dd;
+
+                // [C9. Learn.]
+                if self.decision_level > 0 {
+                    let c = self.maxl;
+                    // MEM may grow a bit larger, but we keep MAXL correct to be able to ignore this
+                    self.mem.resize(self.maxl + learned_rest.len() + 3, 0);
+                    // insert learned clause into MEM
+                    self.mem[c] = ll ^ 1;
+                    let mut k = 0;
+                    let mut jj = 1;
+                    for j in 1..=learned_rest.len() {
+                        let bj = learned_rest[j - 1];
+
+                        // here we compare the stamp again, making use of checking redundancies before
+                        if self.vars[bj as usize >> 1].stamp != self.stamp {
+                            continue;
+                        }
+
+                        k += 1;
+                        if jj == 0 || (self.vars[bj as usize >> 1].val as u32 >> 1) < dd {
+                            self.mem[c + k + jj] = bj ^ 1;
+                        } else {
+                            self.mem[c + 1] = bj ^ 1;
+                            jj = 0;
+                            self.mem[c - 2] = self.watch[ll as usize ^ 1];
+                            self.watch[ll as usize ^ 1] = c as u32;
+                            self.mem[c - 3] = self.watch[bj as usize ^ 1];
+                            self.watch[bj as usize ^ 1] = c as u32;
+                        }
+                    }
+                    self.mem[c - 1] = k as u32 + 1;
+                    self.maxl = c + k + 6;
+
+                    self.reasons[ll as usize] = c as u32;
+                } else {
+                    // new decision (invert literal at level 0)
+                    self.reasons[ll as usize] = 0;
+                }
+
+                self.num_learned += 1;
+                self.trail[self.len_trail] = ll ^ 1;
+                self.vars[ll as usize >> 1].val =
+                    ((2 * self.decision_level) + ((ll ^ 1) & 1)) as i32;
+                self.vars[ll as usize >> 1].tloc = self.len_trail as i32;
+                // is this right? why not complemented?
+                self.len_trail += 1;
+                // TODO make this a parameter
+                self.heap.update_scaling_factor(0.95);
             }
         }
     }
