@@ -665,8 +665,6 @@ impl Debug for Clause<'_> {
 
 #[cfg(test)]
 mod tests {
-    use rand::Rng;
-
     use crate::{waerden, CDCLSolver};
 
     #[test]
@@ -700,21 +698,5 @@ mod tests {
 
             assert_eq!(solver.solve(problem), n < 9, "invalid result for n = {}", n);
         }
-    }
-
-    #[test]
-    fn generate_random_heap() {
-        let n = 8;
-        let mut rng = rand::thread_rng();
-
-        let mut heap = vec![0; n];
-        for k in 1..=n {
-            let j = rng.gen_range(0..k);
-
-            heap[k - 1] = heap[j];
-            heap[j] = k;
-        }
-
-        println!("{:?}", heap);
     }
 }
